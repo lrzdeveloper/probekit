@@ -26,6 +26,20 @@ tells you which engines you still need.
 > This installs an orchestration layer **on top of REA** — it does not replace or
 > redistribute REA. The REA MCP is fetched from npm (`rea-agents`) on demand.
 
+## Quick start
+
+```bash
+# published to npm:
+npx probekit
+
+# or straight from this repo, no npm release needed:
+npx github:lrzdeveloper/probekit
+```
+
+A short wizard scans your machine, lets you pick which agents to wire (detected
+ones default to yes — just press Enter), and applies everything after a
+confirmation. Then **restart/reconnect your agent** so probekit shows up.
+
 ## Requirements
 
 - **Node 20+** to run probekit itself (the installer is a plain Node script).
