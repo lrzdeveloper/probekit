@@ -134,9 +134,11 @@ async function installMcp(agent, mem) {
   const args = ['-y', REA_VERSION, 'mcp'];
   const fmt = agent.format || 'mcpServers';
   if (fmt === 'codex') {
+    // Already present → leave the working TOML entry alone (idempotent; avoids a
+    // duplicate error and never touches a shimmed/interactive `codex`).
+    if (reaInstalled(agent)) return { ok: true, note: 'already configured' };
     if (!which('codex')) return { ok: false, hint: `codex CLI not on PATH — add by hand: codex mcp add rea -- npx ${args.join(' ')}` };
     const envArgs = Object.entries(env).flatMap(([k, v]) => ['--env', `${k}=${v}`]);
-    await run('codex', ['mcp', 'remove', 'rea']); // best-effort → makes the add idempotent (no duplicate error)
     if (await run('codex', ['mcp', 'add', 'rea', ...envArgs, '--', 'npx', ...args])) return { ok: true };
     return { ok: false, hint: `codex mcp add rea -- npx ${args.join(' ')}` };
   }
@@ -226,7 +228,7 @@ async function install(opts = {}) {
   if (!agents.length) { console.log(c.y('  No agents selected or detected — nothing to do.\n')); return; }
   for (const a of agents) {
     const m = await installMcp(a, mem);
-    if (m.ok) console.log(`  ${c.g('✓')} REA MCP → ${tilde(a.mcpFile)} ${m.backup ? c.dim(`(backup ${path.basename(m.backup)})`) : ''}`);
+    if (m.ok) console.log(`  ${c.g('✓')} REA MCP → ${tilde(a.mcpFile)} ${m.note ? c.dim(`(${m.note})`) : m.backup ? c.dim(`(backup ${path.basename(m.backup)})`) : ''}`);
     else console.log(c.y(`  ! REA MCP not set for ${a.label} — run: ${m.hint}`));
     const sk = await installSkillFor(a);
     if (sk?.how === 'native') console.log(`  ${c.g('✓')} skill  → ${tilde(sk.where)}`);
@@ -303,28 +305,34 @@ async function init() {
       const ok = await run('brew', ['upgrade', 'node']);
       s.stop(ok ? 'Node upgraded' : 'brew upgrade node failed — upgrade Node manually');
     }
+    const done = [], manual = [];
     for (const a of agents) {
       const was = reaInstalled(a);
       const s = p.spinner(); s.start(`${was ? 'Updating' : 'Configuring'} ${a.label}`);
       const [m, sk] = await Promise.all([installMcp(a, mem), installSkillFor(a), sleep(400)]);
-      const mcpTag = m.ok ? 'REA MCP' : 'REA MCP (manual step)';
+      const mcpTag = m.ok ? (m.note ? `REA MCP (${m.note})` : 'REA MCP') : 'REA MCP — manual step needed';
       const skTag = sk?.how === 'native' ? ' + skill'
         : sk?.how === 'skills-cli' ? ' + skill (via skills CLI)'
         : sk?.how === 'skills-cli-failed' ? ' (skill failed — run `npx skills add` manually)'
         : '';
       s.stop(`${a.label} — ${mcpTag}${skTag}`);
-      if (!m.ok) p.log.warn(`${a.label}: ${m.hint}`);
+      if (m.ok) done.push(a.label);
+      else { manual.push({ label: a.label, hint: m.hint }); p.log.warn(`${a.label}: ${m.hint}`); }
     }
 
     const nv = (sh('node -v') || '').replace(/^v/, '');
     const nodeOkNow = upgradeNode ? nodeSatisfiesReaV(nv) : nodeSatisfiesRea();
     if (upgradeNode && nodeOkNow) p.log.success(`Node is now ${nv} — satisfies REA.`);
 
-    const steps = [`Restart / reconnect ${agents.map(a => a.label).join(', ')} so probekit loads.`];
+    const steps = [];
+    if (done.length) steps.push(`Restart / reconnect ${done.join(', ')} so probekit loads.`);
+    if (manual.length) steps.push(`Finish by hand for ${manual.map(x => x.label).join(', ')} (commands shown above).`);
     if (!nodeOkNow) steps.push(`Update Node to ${REA_NODE_REQ}${nodeViaBrew() ? ' — run \`brew upgrade node\`' : ' via your Node manager'}. REA stays unhealthy until then.`);
-    p.note(steps.map((s, i) => `${c.dim(`${i + 1}.`)} ${s}`).join('\n'), 'Next steps');
+    if (steps.length) p.note(steps.map((s, i) => `${c.dim(`${i + 1}.`)} ${s}`).join('\n'), 'Next steps');
     p.note(`${c.b(`npx skills add ${SKILLS_REPO}`)}\n${c.dim('Installs the probekit skill on any of 80+ other coding agents.')}`, 'Add probekit elsewhere');
-    p.outro(c.g(`✓ probekit ready on ${agents.map(a => a.label).join(', ')}`));
+    p.outro(done.length
+      ? c.g(`✓ REA MCP ready on ${done.join(', ')}`) + (manual.length ? c.y(`  ·  ${manual.length} need a manual step`) : '')
+      : c.y('No agent fully configured — see the manual steps above.'));
     return;
   } catch (e) {
     if (e && (e.code === 'ABORT_ERR' || e.code === 'ERR_USE_AFTER_CLOSE')) return bail();
