@@ -5,7 +5,8 @@
 [![node](https://img.shields.io/node/v/probekit.svg)](https://nodejs.org)
 
 A one-command installer for a complete **app security / reverse-engineering
-stack**, driven by an agent (Claude Code or Pi).
+stack**, driven by whichever AI agents you have (Claude Code, Pi, Cursor,
+Windsurf, Claude Desktop) — detected automatically, chosen by you.
 
 It wires up two things:
 
@@ -71,26 +72,46 @@ new server registration is picked up.
 ### Staying up to date
 
 `npx probekit` always resolves the latest published version, so re-running it
-picks up new releases automatically. probekit also does a quiet, once-a-day
-check against the npm registry and prints a one-line notice when a newer version
-exists (skipped in CI, when output isn't a terminal, or with
-`PROBEKIT_NO_UPDATE_CHECK=1`). The REA engine itself is intentionally pinned
-(`rea-agents@6.8.0`) so a background REA release can't silently demand a
-different Ghidra or Node — bumping it is a deliberate, released change to
-probekit.
+picks up new releases automatically. For a global install, probekit does a
+quiet, once-a-day check against the npm registry and, when a newer version
+exists, **offers to update right there** (`Update now?` → runs
+`npm i -g probekit@latest` for you — no separate step). The check is skipped in
+CI, when output isn't a terminal, or with `PROBEKIT_NO_UPDATE_CHECK=1`.
+
+The REA engine itself is intentionally pinned (`rea-agents@6.8.0`) so a
+background REA release can't silently demand a different Ghidra or Node —
+bumping it is a deliberate, released change to probekit.
+
+## Supported agents
+
+probekit wires into whichever of these it finds on your machine; the guided
+setup defaults to the detected ones and lets you add or drop any:
+
+| Agent | REA MCP | probekit skill | Config file |
+|---|---|---|---|
+| Claude Code | ✓ | ✓ | `~/.claude.json` |
+| Pi agent | ✓ | ✓ | `~/.pi/agent/mcp.json` |
+| Cursor | ✓ | — | `~/.cursor/mcp.json` |
+| Windsurf | ✓ | — | `~/.codeium/windsurf/mcp_config.json` |
+| Claude Desktop | ✓ | — | `claude_desktop_config.json` |
+
+The `SKILL.md` audit flow is understood only by Claude Code and Pi; other agents
+get the REA MCP tools alone.
 
 ## What `install` changes
 
-- Copies the skill to `~/.claude/skills/probekit/`, and symlinks it into
-  `~/.pi/agent/skills/` if Pi is present.
-- Registers an `rea` MCP server in `~/.claude.json` and `~/.pi/agent/mcp.json`,
-  with engine paths **discovered on your machine** (not hardcoded):
+For each selected agent:
+
+- Registers an `rea` MCP server in that agent's config, with engine paths
+  **discovered on your machine** (not hardcoded):
   - `JAVA_HOME` via `/usr/libexec/java_home` or `brew --prefix openjdk`
   - `GHIDRA_INSTALL_DIR` from the newest `ghidra_12.1.*_PUBLIC` under `~/.rea-tools/`
   - `REA_JADX_MCP_JAR` from `~/.rea-tools/jadx-headless-mcp-*-all.jar`
   - `REA_APKTOOL_COMMAND` from `apktool` on `PATH`
   - `GHIDRA_MAXMEM` sized to ~half your RAM (capped at 16G), and a 30-min startup
     timeout for large binaries
+- For skill-aware agents (Claude Code, Pi), copies the skill into that agent's
+  skills directory.
 - Backs up every config file it touches (`*.bak.<timestamp>`) before writing.
 
 It never installs or upgrades unrelated software, and never executes an analysis

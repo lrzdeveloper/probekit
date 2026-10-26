@@ -1,7 +1,7 @@
 {
   "name": "probekit",
   "version": "0.1.0",
-  "description": "Guided installer for an app-security / reverse-engineering stack: the probekit skill plus the REA MCP server (Ghidra/JADX/apktool) wired into Claude Code and Pi agent.",
+  "description": "Guided, dynamic installer for an app-security / reverse-engineering stack: the probekit skill plus the REA MCP server (Ghidra/JADX/apktool) wired into whichever AI agents you have — Claude Code, Pi, Cursor, Windsurf, Claude Desktop — detected automatically and chosen by you.",
   "type": "module",
   "bin": {
     "probekit": "bin/cli.mjs"

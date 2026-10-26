@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // probekit installer.
-// Wires the REA MCP server + the probekit skill into Claude Code and
-// Pi agent, and reports which analysis engines are present. Zero dependencies.
+// Registers the REA MCP server (and, where supported, the probekit skill) into
+// whichever AI agents you have — detected dynamically, chosen by you. Zero deps.
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -13,21 +13,9 @@ const HOME = os.homedir();
 const PKG_ROOT = path.resolve(fileURLToPath(import.meta.url), '..', '..');
 const SKILL_SRC = path.join(PKG_ROOT, 'skills', 'probekit');
 const REA_TOOLS = path.join(HOME, '.rea-tools');
-const CLAUDE_CFG = path.join(HOME, '.claude.json');
-const PI_CFG = path.join(HOME, '.pi', 'agent', 'mcp.json');
 const REA_VERSION = 'rea-agents@6.8.0';
 const REA_NODE_REQ = '^22.23.4 || ^24.22.1 || >=26.12.1'; // rea-agents@6.8.0 engines.node
-const GHIDRA_SERIES = /^ghidra_12\.1\.\d+_PUBLIC$/; // REA requires the 12.1.x series
-
-// Does the running Node satisfy what the pinned REA needs? (Node spawns the MCP.)
-function nodeSatisfiesRea() {
-  const [maj, min, pat] = process.versions.node.split('.').map(Number);
-  const ge = (a, b, c) => maj > a || (maj === a && (min > b || (min === b && pat >= c)));
-  if (maj === 22) return ge(22, 23, 4);
-  if (maj === 24) return ge(24, 22, 1);
-  if (maj >= 26) return ge(26, 12, 1);
-  return false; // 23 and 25 are unsupported
-}
+const GHIDRA_SERIES = /^ghidra_12\.1\.\d+_PUBLIC$/;        // REA requires the 12.1.x series
 
 const c = { dim: s => `\x1b[2m${s}\x1b[0m`, g: s => `\x1b[32m${s}\x1b[0m`,
   r: s => `\x1b[31m${s}\x1b[0m`, y: s => `\x1b[33m${s}\x1b[0m`, b: s => `\x1b[1m${s}\x1b[0m` };
@@ -42,9 +30,37 @@ const writeJson = (p, o) => { fs.mkdirSync(path.dirname(p), { recursive: true })
 const backup = p => { if (!exists(p)) return null; const b = `${p}.bak.${Date.now()}`; fs.copyFileSync(p, b); return b; };
 const globFirst = (dir, re) => { try { return fs.readdirSync(dir).filter(f => re.test(f)).sort().reverse().map(f => path.join(dir, f))[0] || ''; } catch { return ''; } };
 
+// ---- agent targets: detected dynamically, chosen by the user ----
+// mcp.type:'stdio' only where the agent's schema expects it (Pi). skillDir set
+// only for agents that understand SKILL.md (Claude Code, Pi); others get the
+// REA MCP alone.
+const AGENTS = [
+  { id: 'claude-code', label: 'Claude Code',
+    detect: () => exists(path.join(HOME, '.claude.json')) || exists(path.join(HOME, '.claude')),
+    mcpFile: path.join(HOME, '.claude.json'),
+    skillDir: path.join(HOME, '.claude', 'skills', 'probekit') },
+  { id: 'pi', label: 'Pi agent',
+    detect: () => exists(path.join(HOME, '.pi', 'agent')),
+    mcpFile: path.join(HOME, '.pi', 'agent', 'mcp.json'), mcpType: 'stdio',
+    skillDir: path.join(HOME, '.pi', 'agent', 'skills', 'probekit') },
+  { id: 'cursor', label: 'Cursor',
+    detect: () => exists(path.join(HOME, '.cursor')),
+    mcpFile: path.join(HOME, '.cursor', 'mcp.json') },
+  { id: 'windsurf', label: 'Windsurf',
+    detect: () => exists(path.join(HOME, '.codeium', 'windsurf')),
+    mcpFile: path.join(HOME, '.codeium', 'windsurf', 'mcp_config.json') },
+  { id: 'claude-desktop', label: 'Claude Desktop',
+    detect: () => exists(path.join(HOME, 'Library', 'Application Support', 'Claude')) || exists(path.join(HOME, '.config', 'Claude')),
+    mcpFile: process.platform === 'darwin'
+      ? path.join(HOME, 'Library', 'Application Support', 'Claude', 'claude_desktop_config.json')
+      : path.join(HOME, '.config', 'Claude', 'claude_desktop_config.json') },
+];
+const byId = id => AGENTS.find(a => a.id === id);
+const detected = () => AGENTS.filter(a => a.detect());
+
 // ---- engine discovery (portable, not hardcoded to one machine) ----
 function findJava() {
-  const jh = sh('/usr/libexec/java_home 2>/dev/null');      // macOS
+  const jh = sh('/usr/libexec/java_home 2>/dev/null');
   if (jh) return jh;
   const brew = sh('brew --prefix openjdk 2>/dev/null');
   if (brew && exists(brew)) return brew;
@@ -58,7 +74,16 @@ function totalMemGB() {
 }
 const ghidraMemG = () => { const t = totalMemGB(); return t ? Math.max(4, Math.min(16, Math.floor(t / 2))) : 8; };
 
-// REA MCP env, built from whatever is actually installed on this host.
+// Does the running Node satisfy what the pinned REA needs? (Node spawns the MCP.)
+function nodeSatisfiesRea() {
+  const [maj, min, pat] = process.versions.node.split('.').map(Number);
+  const ge = (a, b, c) => maj > a || (maj === a && (min > b || (min === b && pat >= c)));
+  if (maj === 22) return ge(22, 23, 4);
+  if (maj === 24) return ge(24, 22, 1);
+  if (maj >= 26) return ge(26, 12, 1);
+  return false; // 23 and 25 are unsupported
+}
+
 function buildEnv(memOverride) {
   const env = {};
   const jar = findJadxJar(); if (jar) env.REA_JADX_MCP_JAR = jar;
@@ -69,30 +94,24 @@ function buildEnv(memOverride) {
   return env;
 }
 
-// ---- actions ----
-function registerRea(configPath, withType, memOverride) {
-  const b = backup(configPath);
-  const cfg = readJson(configPath);
+// ---- per-agent actions ----
+function reaEntry(agent, mem) { return { ...(agent.mcpType ? { type: agent.mcpType } : {}), command: 'npx', args: ['-y', REA_VERSION, 'mcp'], env: buildEnv(mem) }; }
+function registerReaIn(agent, mem) {
+  const b = backup(agent.mcpFile);
+  const cfg = readJson(agent.mcpFile);
   cfg.mcpServers = cfg.mcpServers || {};
-  cfg.mcpServers.rea = { ...(withType ? { type: 'stdio' } : {}), command: 'npx', args: ['-y', REA_VERSION, 'mcp'], env: buildEnv(memOverride) };
-  writeJson(configPath, cfg);
+  cfg.mcpServers.rea = reaEntry(agent, mem);
+  writeJson(agent.mcpFile, cfg);
   return b;
 }
-
-function installSkill() {
-  const dst = path.join(HOME, '.claude', 'skills', 'probekit');
-  fs.rmSync(dst, { recursive: true, force: true });
-  fs.cpSync(SKILL_SRC, dst, { recursive: true });
-  // Make it available to Pi agent too, as a symlink into its skills dir.
-  const piSkills = path.join(HOME, '.pi', 'agent', 'skills');
-  if (exists(path.join(HOME, '.pi', 'agent'))) {
-    fs.mkdirSync(piSkills, { recursive: true });
-    const link = path.join(piSkills, 'probekit');
-    try { fs.rmSync(link, { force: true }); } catch {}
-    try { fs.symlinkSync(dst, link); } catch {}
-  }
-  return dst;
+function installSkillInto(agent) {
+  if (!agent.skillDir) return null;
+  fs.rmSync(agent.skillDir, { recursive: true, force: true });
+  fs.cpSync(SKILL_SRC, agent.skillDir, { recursive: true });
+  return agent.skillDir;
 }
+const reaInstalled = agent => exists(agent.mcpFile) && !!(readJson(agent.mcpFile).mcpServers || {}).rea;
+const skillInstalled = agent => !!agent.skillDir && exists(path.join(agent.skillDir, 'SKILL.md'));
 
 function doctor() {
   const java = findJava(), gh = findGhidra(), jar = findJadxJar();
@@ -107,35 +126,38 @@ function doctor() {
   console.log(c.b('\nEngine check\n'));
   for (const [name, ok, hint] of rows)
     console.log(`  ${ok ? c.g('✓') : c.r('✗')} ${name.padEnd(18)} ${ok ? c.dim(hint) : c.y(hint)}`);
-  const reaClaude = !!(readJson(CLAUDE_CFG).mcpServers || {}).rea;
-  const reaPi = exists(PI_CFG) && !!(readJson(PI_CFG).mcpServers || {}).rea;
   console.log(c.b('\nMCP wiring\n'));
-  console.log(`  ${reaClaude ? c.g('✓') : c.r('✗')} REA registered in ~/.claude.json`);
-  console.log(`  ${reaPi ? c.g('✓') : (exists(PI_CFG) ? c.r('✗') : c.dim('–'))} REA registered in ~/.pi/agent/mcp.json ${exists(PI_CFG) ? '' : c.dim('(Pi not installed)')}`);
-  const skill = exists(path.join(HOME, '.claude', 'skills', 'probekit', 'SKILL.md'));
-  console.log(`  ${skill ? c.g('✓') : c.r('✗')} probekit skill installed\n`);
+  for (const a of AGENTS) {
+    const det = a.detect();
+    const bits = [reaInstalled(a) ? c.g('REA ✓') : det ? c.r('REA ✗') : c.dim('REA –')];
+    if (a.skillDir) bits.push(skillInstalled(a) ? c.g('skill ✓') : det ? c.r('skill ✗') : c.dim('skill –'));
+    else bits.push(c.dim('(MCP only)'));
+    console.log(`  ${det ? c.g('●') : c.dim('○')} ${a.label.padEnd(15)} ${bits.join('   ')}${det ? '' : c.dim('  not detected')}`);
+  }
+  console.log('');
 }
 
-// Non-interactive apply. opts: { claude, pi, mem }
+// Non-interactive apply. opts: { agents: [ids]|undefined (default detected), mem }
 function install(opts = {}) {
-  const claude = opts.claude !== false;
-  const pi = opts.pi !== undefined ? opts.pi : (exists(PI_CFG) || exists(path.join(HOME, '.pi', 'agent')));
+  const agents = (opts.agents ? opts.agents.map(byId).filter(Boolean) : detected());
   const mem = opts.mem;
   console.log(c.b('\nprobekit — install\n'));
-  const skill = installSkill();
-  console.log(`  ${c.g('✓')} skill → ${tilde(skill)}`);
-  if (claude) { const b = registerRea(CLAUDE_CFG, false, mem); console.log(`  ${c.g('✓')} REA MCP → ~/.claude.json ${b ? c.dim(`(backup ${path.basename(b)})`) : ''}`); }
-  if (pi) { const b = registerRea(PI_CFG, true, mem); console.log(`  ${c.g('✓')} REA MCP → ~/.pi/agent/mcp.json ${b ? c.dim(`(backup ${path.basename(b)})`) : ''}`); }
+  if (!agents.length) { console.log(c.y('  No agents selected or detected — nothing to do.\n')); return; }
+  for (const a of agents) {
+    const b = registerReaIn(a, mem);
+    console.log(`  ${c.g('✓')} REA MCP → ${tilde(a.mcpFile)} ${b ? c.dim(`(backup ${path.basename(b)})`) : ''}`);
+    if (a.skillDir) { installSkillInto(a); console.log(`  ${c.g('✓')} skill  → ${tilde(a.skillDir)}`); }
+  }
+  if (!nodeSatisfiesRea()) console.log(c.y(`\n  ⚠ Node ${process.versions.node} is too old for REA (${REA_NODE_REQ}).\n    Update Node, then reconnect the MCP. Until then REA will report unhealthy.`));
   const env = buildEnv(mem);
-  if (!env.GHIDRA_INSTALL_DIR || !env.REA_JADX_MCP_JAR)
-    console.log(c.y('\n  Some engines are missing — run `npx probekit doctor` then `npx probekit setup-engines`.'));
-  console.log(c.dim('\n  Restart Claude Code / Pi (or reconnect the REA MCP) to pick up the changes.\n'));
+  if (!env.GHIDRA_INSTALL_DIR || !env.REA_JADX_MCP_JAR) console.log(c.y('\n  Some engines are missing — run `probekit setup-engines`.'));
+  console.log(c.dim('\n  Restart / reconnect the agent(s) to pick up the REA MCP.\n'));
   doctor();
 }
 
 // Guided, interactive setup. Falls back to a plain install when not a TTY.
 async function init() {
-  if (!process.stdin.isTTY) { console.log(c.dim('(non-interactive input — running install with discovered defaults)')); return install({}); }
+  if (!process.stdin.isTTY) { console.log(c.dim('(non-interactive input — running install for detected agents)')); return install({}); }
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
   const ask = async (q, def) => { const a = (await rl.question(`${q}${def !== undefined ? c.dim(` [${def}]`) : ''}: `)).trim(); return a || (def !== undefined ? String(def) : ''); };
   const confirm = async (q, dy = true) => { const a = (await rl.question(`${q} ${c.dim(dy ? '(Y/n)' : '(y/N)')}: `)).trim().toLowerCase(); return a ? a.startsWith('y') : dy; };
@@ -144,13 +166,15 @@ async function init() {
     console.log(c.dim('Detects your engines and agents, asks a few questions, shows what it will change, then applies.'));
     doctor();
 
-    const hasClaude = exists(CLAUDE_CFG) || exists(path.join(HOME, '.claude'));
-    const hasPi = exists(path.join(HOME, '.pi', 'agent'));
-    const doClaude = hasClaude ? await confirm('Configure Claude Code (~/.claude.json)?', true) : false;
-    if (!hasClaude) console.log(c.dim('  Claude Code not detected — skipping.'));
-    const doPi = hasPi ? await confirm('Configure Pi agent (~/.pi/agent)?', true) : false;
-    if (!hasPi) console.log(c.dim('  Pi agent not detected — skipping.'));
-    if (!doClaude && !doPi) { console.log(c.y('\nNothing selected — nothing to do.')); return; }
+    console.log(c.b('Which agents should get probekit?') + c.dim('  (detected ones default to yes)'));
+    const chosen = [];
+    for (const a of AGENTS) {
+      const det = a.detect();
+      const tag = det ? c.g(' detected') : c.dim(' not detected');
+      const extra = a.skillDir ? '' : c.dim(' — REA MCP only');
+      if (await confirm(`  ${a.label}${tag}${extra}`, det)) chosen.push(a);
+    }
+    if (!chosen.length) { console.log(c.y('\nNo agents selected — nothing to do.')); return; }
 
     const ram = totalMemGB();
     let mem = await ask(`Ghidra heap size${ram ? ` (detected ~${ram.toFixed(0)}GB RAM)` : ''}`, `${ghidraMemG()}G`);
@@ -161,19 +185,17 @@ async function init() {
     if (missing.length) { console.log(c.y(`\nMissing engines: ${missing.join(', ')}`)); runEngines = await confirm('Install the installable ones now (brew + guided Ghidra)?', false); }
 
     console.log(c.b('\nWill apply:'));
-    console.log(`  • skill → ~/.claude/skills/probekit${doPi ? ' (+ Pi symlink)' : ''}`);
-    if (doClaude) console.log(`  • REA MCP → ~/.claude.json   (Ghidra heap ${mem})`);
-    if (doPi) console.log(`  • REA MCP → ~/.pi/agent/mcp.json   (Ghidra heap ${mem})`);
+    for (const a of chosen) console.log(`  • ${a.label}: REA MCP → ${tilde(a.mcpFile)}${a.skillDir ? ' + skill' : ''}   ${c.dim(`(Ghidra heap ${mem})`)}`);
     if (runEngines) console.log('  • run setup-engines first');
     console.log(c.dim('  (every config file is backed up before writing)'));
+    if (!nodeSatisfiesRea()) console.log(c.y(`  note: your Node ${process.versions.node} is below REA's requirement — doctor will flag it until you update Node`));
     if (!await confirm('\nProceed?', true)) { console.log(c.y('Aborted — nothing was changed.')); return; }
 
     rl.close();
     if (runEngines) setupEngines();
-    install({ claude: doClaude, pi: doPi, mem });
+    install({ agents: chosen.map(a => a.id), mem });
     return;
   } catch (e) {
-    // Ctrl+D / closed stdin during a prompt — nothing has been written yet.
     if (e && e.code === 'ABORT_ERR') { console.log(c.y('\nAborted — nothing was changed.')); return; }
     throw e;
   } finally { try { rl.close(); } catch {} }
@@ -193,7 +215,7 @@ function setupEngines() {
   }
   if (findGhidra()) console.log(`  ${c.g('✓')} Ghidra 12.1.x already present`);
   else ghidraHelp();
-  if (!findJadxJar()) console.log(c.y(`\n  jadx MCP jar not found. It is provisioned by REA's own engine setup; place\n  jadx-headless-mcp-*-all.jar in ${tilde(REA_TOOLS)} and re-run \`npx probekit install\`.`));
+  if (!findJadxJar()) console.log(c.y(`\n  jadx MCP jar not found. It is provisioned by REA's own engine setup; place\n  jadx-headless-mcp-*-all.jar in ${tilde(REA_TOOLS)} and re-run \`probekit install\`.`));
   console.log('');
 }
 
@@ -204,20 +226,16 @@ function ghidraHelp() {
     2. Unzip into ${tilde(REA_TOOLS)}/ (so you get ${tilde(REA_TOOLS)}/ghidra_12.1.x_PUBLIC/)
     3. If the decompiler native is missing for your CPU, build it once:
          <ghidra>/support/buildNatives
-    4. Re-run \`npx probekit install\` to wire the path into the MCP env.`));
+    4. Re-run \`probekit install\` to wire the path into the MCP env.`));
 }
 
 function uninstall() {
   console.log(c.b('\nuninstall (config only — engines are left in place)\n'));
-  for (const [p, label] of [[CLAUDE_CFG, '~/.claude.json'], [PI_CFG, '~/.pi/agent/mcp.json']]) {
-    if (!exists(p)) continue;
-    const cfg = readJson(p);
-    if (cfg.mcpServers && cfg.mcpServers.rea) { backup(p); delete cfg.mcpServers.rea; writeJson(p, cfg); console.log(`  ${c.g('✓')} removed REA MCP from ${label}`); }
+  for (const a of AGENTS) {
+    if (reaInstalled(a)) { const cfg = readJson(a.mcpFile); backup(a.mcpFile); delete cfg.mcpServers.rea; writeJson(a.mcpFile, cfg); console.log(`  ${c.g('✓')} removed REA MCP from ${tilde(a.mcpFile)}`); }
+    if (skillInstalled(a)) { fs.rmSync(a.skillDir, { recursive: true, force: true }); console.log(`  ${c.g('✓')} removed skill from ${tilde(a.skillDir)}`); }
   }
-  for (const link of [path.join(HOME, '.pi', 'agent', 'skills', 'probekit')]) {
-    try { if (fs.lstatSync(link).isSymbolicLink()) { fs.rmSync(link, { force: true }); console.log(`  ${c.g('✓')} removed Pi skill link`); } } catch {}
-  }
-  console.log(c.dim('  The ~/.claude/skills/probekit directory was left in place; delete it manually if you want it gone.\n'));
+  console.log('');
 }
 
 function help() {
@@ -227,22 +245,24 @@ ${c.b('probekit')} v${VERSION} — app-security / reverse-engineering stack inst
   ${c.b('npx probekit')} [command]
 
   (no command)   Guided interactive setup (same as 'init')
-  init           Guided interactive setup: detect, ask, confirm, apply
-  install        Non-interactive install with discovered defaults
-  doctor         Report which engines and MCP wiring are present
+  init           Guided interactive setup: detect agents, choose, confirm, apply
+  install        Non-interactive install for all detected agents
+  doctor         Report engines and, per agent, REA + skill wiring
   setup-engines  Install the analysis engines (brew where possible; Ghidra guided)
-  uninstall      Remove the REA MCP entries and the Pi skill link
+  uninstall      Remove the REA MCP entries and the probekit skill from all agents
   help           This message
+
+  Supported agents: ${AGENTS.map(a => a.label).join(', ')}
 `);
 }
 
 const VERSION = (() => { try { return readJson(path.join(PKG_ROOT, 'package.json')).version || '0.0.0'; } catch { return '0.0.0'; } })();
 
-// ---- update check (update-notifier style: daily-cached, fail-silent, off in CI) ----
+// ---- update check: daily-cached, fail-silent, off in CI; offers to apply ----
 const semverGt = (a, b) => { const x = a.split('.').map(Number), y = b.split('.').map(Number); for (let i = 0; i < 3; i++) { if ((x[i] || 0) > (y[i] || 0)) return true; if ((x[i] || 0) < (y[i] || 0)) return false; } return false; };
 async function latestVersion() {
   const cacheFile = path.join(os.tmpdir(), 'probekit-update-check.json');
-  try { const c = readJson(cacheFile); if (c.at && Date.now() - c.at < 864e5 && c.v) return c.v; } catch {}
+  try { const cc = readJson(cacheFile); if (cc.at && Date.now() - cc.at < 864e5 && cc.v) return cc.v; } catch {}
   try {
     const ac = new AbortController(); const t = setTimeout(() => ac.abort(), 1500);
     const r = await fetch('https://registry.npmjs.org/probekit/latest', { signal: ac.signal });
@@ -255,7 +275,18 @@ async function latestVersion() {
 }
 async function notifyUpdate() {
   if (!process.stdout.isTTY || process.env.CI || process.env.PROBEKIT_NO_UPDATE_CHECK) return;
-  try { const l = await latestVersion(); if (l && semverGt(l, VERSION)) console.log(c.y(`\n  ▲ probekit ${l} is available (you have ${VERSION}) — run \`npx probekit@latest\``)); } catch {}
+  const l = await latestVersion();
+  if (!l || !semverGt(l, VERSION)) return;
+  console.log(c.y(`\n  ▲ probekit ${l} is available (you have ${VERSION}).`));
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    const a = (await rl.question(`  Update now? ${c.dim('(y/N)')}: `)).trim().toLowerCase();
+    rl.close();
+    if (!a.startsWith('y')) { console.log(c.dim('  Later: `npm i -g probekit@latest`, or just run `npx probekit@latest`.')); return; }
+    console.log(c.dim('  Updating globally via npm…'));
+    try { execSync('npm install -g probekit@latest', { stdio: 'inherit' }); console.log(c.g('  Updated — re-run `probekit` to use the new version.')); }
+    catch { console.log(c.y('  Update failed — run `npm i -g probekit@latest` manually (or use `npx probekit@latest`).')); }
+  } catch { try { rl.close(); } catch {} }
 }
 
 async function main() {
