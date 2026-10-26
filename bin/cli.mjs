@@ -135,6 +135,8 @@ function installSkillInto(agent) {
 }
 const reaInstalled = agent => exists(agent.mcpFile) && !!(readJson(agent.mcpFile).mcpServers || {}).rea;
 const skillInstalled = agent => !!agent.skillDir && exists(path.join(agent.skillDir, 'SKILL.md'));
+// Agents only load/unload probekit on restart — always tell the user to reload.
+const reloadNote = (labels, appearing) => c.dim(`\n  Restart / reconnect ${labels.length ? labels.join(', ') : 'your agent(s)'} ${appearing ? 'so probekit (its skill + REA tools) shows up.' : 'so probekit is fully unloaded.'}\n`);
 
 function doctor() {
   const java = findJava(), gh = findGhidra(), jar = findJadxJar();
@@ -174,7 +176,7 @@ function install(opts = {}) {
   if (!nodeSatisfiesRea()) console.log(c.y(`\n  ⚠ Node ${process.versions.node} is too old for REA (${REA_NODE_REQ}).\n    Update Node, then reconnect the MCP. Until then REA will report unhealthy.`));
   const env = buildEnv(mem);
   if (!env.GHIDRA_INSTALL_DIR || !env.REA_JADX_MCP_JAR) console.log(c.y('\n  Some engines are missing — run `probekit setup-engines`.'));
-  console.log(c.dim('\n  Restart / reconnect the agent(s) to pick up the REA MCP.\n'));
+  console.log(reloadNote(agents.map(a => a.label), true));
   doctor();
 }
 
@@ -253,7 +255,7 @@ async function init() {
     const nv = (sh('node -v') || '').replace(/^v/, '');
     if (upgradeNode && nodeSatisfiesReaV(nv)) console.log(c.g(`\n  ✓ Node is now ${nv} — satisfies REA.`));
     else if (!nodeSatisfiesRea()) console.log(c.y(`\n  ⚠ Update Node (${REA_NODE_REQ})${nodeViaBrew() ? ' — `brew upgrade node`' : ' via your Node manager'} — then reconnect; REA stays unhealthy until then.`));
-    console.log(c.dim('\n  Restart / reconnect your agent(s) to load the REA MCP.\n'));
+    console.log(reloadNote(chosen.map(a => a.label), true));
     return;
   } catch (e) {
     // stdin closed mid-flow (Ctrl+D, piped EOF) — nothing was written yet.
@@ -292,11 +294,15 @@ function ghidraHelp() {
 
 function uninstall() {
   console.log(c.b('\nuninstall (config only — engines are left in place)\n'));
+  const touched = [];
   for (const a of AGENTS) {
-    if (reaInstalled(a)) { const cfg = readJson(a.mcpFile); backup(a.mcpFile); delete cfg.mcpServers.rea; writeJson(a.mcpFile, cfg); console.log(`  ${c.g('✓')} removed REA MCP from ${tilde(a.mcpFile)}`); }
-    if (skillInstalled(a)) { fs.rmSync(a.skillDir, { recursive: true, force: true }); console.log(`  ${c.g('✓')} removed skill from ${tilde(a.skillDir)}`); }
+    let hit = false;
+    if (reaInstalled(a)) { const cfg = readJson(a.mcpFile); backup(a.mcpFile); delete cfg.mcpServers.rea; writeJson(a.mcpFile, cfg); console.log(`  ${c.g('✓')} removed REA MCP from ${tilde(a.mcpFile)}`); hit = true; }
+    if (skillInstalled(a)) { fs.rmSync(a.skillDir, { recursive: true, force: true }); console.log(`  ${c.g('✓')} removed skill from ${tilde(a.skillDir)}`); hit = true; }
+    if (hit) touched.push(a.label);
   }
-  console.log('');
+  if (!touched.length) { console.log(c.dim('  Nothing to remove — probekit was not wired into any agent.\n')); return; }
+  console.log(reloadNote(touched, false));
 }
 
 function help() {
