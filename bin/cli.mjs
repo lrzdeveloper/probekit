@@ -16,7 +16,14 @@ const REA_TOOLS = path.join(HOME, '.rea-tools');
 const CLAUDE_CFG = path.join(HOME, '.claude.json');
 const PI_CFG = path.join(HOME, '.pi', 'agent', 'mcp.json');
 const REA_VERSION = 'rea-agents@6.4.0';
+const REA_NODE_REQ = '^22.19.0 || ^24.11.0 || >=26.0.0'; // rea-agents@6.4.0 engines.node
 const GHIDRA_SERIES = /^ghidra_12\.1\.\d+_PUBLIC$/; // REA requires the 12.1.x series
+
+// Does the running Node satisfy what the pinned REA needs? (Node spawns the MCP.)
+function nodeSatisfiesRea() {
+  const [maj, min] = process.versions.node.split('.').map(Number);
+  return (maj === 22 && min >= 19) || (maj === 24 && min >= 11) || maj >= 26;
+}
 
 const c = { dim: s => `\x1b[2m${s}\x1b[0m`, g: s => `\x1b[32m${s}\x1b[0m`,
   r: s => `\x1b[31m${s}\x1b[0m`, y: s => `\x1b[33m${s}\x1b[0m`, b: s => `\x1b[1m${s}\x1b[0m` };
@@ -86,7 +93,7 @@ function installSkill() {
 function doctor() {
   const java = findJava(), gh = findGhidra(), jar = findJadxJar();
   const rows = [
-    ['node', !!which('node'), which('node') || 'install Node 18+ from nodejs.org'],
+    [`node (REA needs ${REA_NODE_REQ})`, nodeSatisfiesRea(), nodeSatisfiesRea() ? process.versions.node : `${process.versions.node} — update Node so the REA MCP can run`],
     ['java (JDK 17+)', !!java, java || 'brew install openjdk'],
     ['Ghidra 12.1.x', !!gh, gh || 'npx probekit setup-engines   (12.2+ is rejected by REA)'],
     ['jadx MCP jar', !!jar, jar || `place jadx-headless-mcp-*-all.jar in ${tilde(REA_TOOLS)} (ships with REA engine setup)`],
@@ -227,8 +234,33 @@ ${c.b('probekit')} v${VERSION} — app-security / reverse-engineering stack inst
 
 const VERSION = (() => { try { return readJson(path.join(PKG_ROOT, 'package.json')).version || '0.0.0'; } catch { return '0.0.0'; } })();
 
-const raw = process.argv[2] || 'init';
-if (raw === '--version' || raw === '-v') { console.log(VERSION); process.exit(0); }
-const cmd = (raw === '--help' || raw === '-h') ? 'help' : raw;
-const table = { init, setup: init, install: () => install({}), doctor, 'setup-engines': setupEngines, engines: setupEngines, uninstall, help };
-(table[cmd] || help)();
+// ---- update check (update-notifier style: daily-cached, fail-silent, off in CI) ----
+const semverGt = (a, b) => { const x = a.split('.').map(Number), y = b.split('.').map(Number); for (let i = 0; i < 3; i++) { if ((x[i] || 0) > (y[i] || 0)) return true; if ((x[i] || 0) < (y[i] || 0)) return false; } return false; };
+async function latestVersion() {
+  const cacheFile = path.join(os.tmpdir(), 'probekit-update-check.json');
+  try { const c = readJson(cacheFile); if (c.at && Date.now() - c.at < 864e5 && c.v) return c.v; } catch {}
+  try {
+    const ac = new AbortController(); const t = setTimeout(() => ac.abort(), 1500);
+    const r = await fetch('https://registry.npmjs.org/probekit/latest', { signal: ac.signal });
+    clearTimeout(t);
+    if (!r.ok) return null;
+    const v = (await r.json()).version;
+    try { writeJson(cacheFile, { at: Date.now(), v }); } catch {}
+    return v;
+  } catch { return null; }
+}
+async function notifyUpdate() {
+  if (!process.stdout.isTTY || process.env.CI || process.env.PROBEKIT_NO_UPDATE_CHECK) return;
+  try { const l = await latestVersion(); if (l && semverGt(l, VERSION)) console.log(c.y(`\n  ▲ probekit ${l} is available (you have ${VERSION}) — run \`npx probekit@latest\``)); } catch {}
+}
+
+async function main() {
+  const raw = process.argv[2] || 'init';
+  if (raw === '--version' || raw === '-v') { console.log(VERSION); return; }
+  const cmd = (raw === '--help' || raw === '-h') ? 'help' : raw;
+  const table = { init, setup: init, install: () => install({}), doctor, 'setup-engines': setupEngines, engines: setupEngines, uninstall, help };
+  await (table[cmd] || help)();
+  if (cmd !== 'help') await notifyUpdate();
+}
+
+main();

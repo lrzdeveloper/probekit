@@ -27,7 +27,9 @@ tells you which engines you still need.
 
 ## Requirements
 
-- **Node 18+** (for `npx`)
+- **Node `^22.19.0 || ^24.11.0 || >=26.0.0`** — this is what the pinned
+  `rea-agents@6.4.0` requires (Node spawns the REA MCP). Node 23 and 25 are not
+  supported. `probekit doctor` flags your Node if it's too old.
 - **JDK 17+** (Ghidra and JADX are Java)
 - **Ghidra 12.1.x** — REA pins the 12.1 series; 12.2+ is rejected
 - **apktool**, **mitmproxy** (for Android decoding and live network capture)
@@ -62,6 +64,17 @@ node bin/cli.mjs            # guided setup
 
 After installing, **restart Claude Code / Pi** (or reconnect the REA MCP) so the
 new server registration is picked up.
+
+### Staying up to date
+
+`npx probekit` always resolves the latest published version, so re-running it
+picks up new releases automatically. probekit also does a quiet, once-a-day
+check against the npm registry and prints a one-line notice when a newer version
+exists (skipped in CI, when output isn't a terminal, or with
+`PROBEKIT_NO_UPDATE_CHECK=1`). The REA engine itself is intentionally pinned
+(`rea-agents@6.4.0`) so a background REA release can't silently demand a
+different Ghidra or Node — bumping it is a deliberate, released change to
+probekit.
 
 ## What `install` changes
 
