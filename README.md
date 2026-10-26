@@ -27,8 +27,8 @@ tells you which engines you still need.
 
 ## Requirements
 
-- **Node `^22.19.0 || ^24.11.0 || >=26.0.0`** — this is what the pinned
-  `rea-agents@6.4.0` requires (Node spawns the REA MCP). Node 23 and 25 are not
+- **Node `^22.23.4 || ^24.22.1 || >=26.12.1`** — this is what the pinned
+  `rea-agents@6.8.0` requires (Node spawns the REA MCP). Node 23 and 25 are not
   supported. `probekit doctor` flags your Node if it's too old.
 - **JDK 17+** (Ghidra and JADX are Java)
 - **Ghidra 12.1.x** — REA pins the 12.1 series; 12.2+ is rejected
@@ -72,7 +72,7 @@ picks up new releases automatically. probekit also does a quiet, once-a-day
 check against the npm registry and prints a one-line notice when a newer version
 exists (skipped in CI, when output isn't a terminal, or with
 `PROBEKIT_NO_UPDATE_CHECK=1`). The REA engine itself is intentionally pinned
-(`rea-agents@6.4.0`) so a background REA release can't silently demand a
+(`rea-agents@6.8.0`) so a background REA release can't silently demand a
 different Ghidra or Node — bumping it is a deliberate, released change to
 probekit.
 

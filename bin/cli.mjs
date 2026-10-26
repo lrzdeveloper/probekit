@@ -15,14 +15,18 @@ const SKILL_SRC = path.join(PKG_ROOT, 'skills', 'probekit');
 const REA_TOOLS = path.join(HOME, '.rea-tools');
 const CLAUDE_CFG = path.join(HOME, '.claude.json');
 const PI_CFG = path.join(HOME, '.pi', 'agent', 'mcp.json');
-const REA_VERSION = 'rea-agents@6.4.0';
-const REA_NODE_REQ = '^22.19.0 || ^24.11.0 || >=26.0.0'; // rea-agents@6.4.0 engines.node
+const REA_VERSION = 'rea-agents@6.8.0';
+const REA_NODE_REQ = '^22.23.4 || ^24.22.1 || >=26.12.1'; // rea-agents@6.8.0 engines.node
 const GHIDRA_SERIES = /^ghidra_12\.1\.\d+_PUBLIC$/; // REA requires the 12.1.x series
 
 // Does the running Node satisfy what the pinned REA needs? (Node spawns the MCP.)
 function nodeSatisfiesRea() {
-  const [maj, min] = process.versions.node.split('.').map(Number);
-  return (maj === 22 && min >= 19) || (maj === 24 && min >= 11) || maj >= 26;
+  const [maj, min, pat] = process.versions.node.split('.').map(Number);
+  const ge = (a, b, c) => maj > a || (maj === a && (min > b || (min === b && pat >= c)));
+  if (maj === 22) return ge(22, 23, 4);
+  if (maj === 24) return ge(24, 22, 1);
+  if (maj >= 26) return ge(26, 12, 1);
+  return false; // 23 and 25 are unsupported
 }
 
 const c = { dim: s => `\x1b[2m${s}\x1b[0m`, g: s => `\x1b[32m${s}\x1b[0m`,
