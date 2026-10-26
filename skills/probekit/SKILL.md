@@ -1,5 +1,5 @@
 ---
-name: app-security-audit
+name: probekit
 description: >-
   Audit whether an app or artifact is safe to run — does it contain malware,
   spyware, data exfiltration, persistence, or other dangerous behavior. Drives a

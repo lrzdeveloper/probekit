@@ -1,7 +1,7 @@
 {
   "name": "probekit",
   "version": "0.1.0",
-  "description": "Guided installer for a reverse-engineering / app-security-audit stack: the app-security-audit skill plus the REA MCP server (Ghidra/JADX/apktool) wired into Claude Code and Pi agent.",
+  "description": "Guided installer for an app-security / reverse-engineering stack: the probekit skill plus the REA MCP server (Ghidra/JADX/apktool) wired into Claude Code and Pi agent.",
   "type": "module",
   "bin": {
     "probekit": "bin/cli.mjs"
@@ -13,7 +13,7 @@
     "LICENSE"
   ],
   "engines": {
-    "node": ">=18"
+    "node": ">=20"
   },
   "keywords": [
     "security",
@@ -26,8 +26,21 @@
     "mcp",
     "skill"
   ],
+  "author": "lrzdeveloper",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lrzdeveloper/probekit.git"
+  },
+  "bugs": {
+    "url": "https://github.com/lrzdeveloper/probekit/issues"
+  },
+  "homepage": "https://github.com/lrzdeveloper/probekit#readme",
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
-    "doctor": "node bin/cli.mjs doctor"
+    "doctor": "node bin/cli.mjs doctor",
+    "test": "node --test"
   }
 }

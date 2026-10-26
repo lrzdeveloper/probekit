@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // probekit installer.
-// Wires the REA MCP server + the app-security-audit skill into Claude Code and
+// Wires the REA MCP server + the probekit skill into Claude Code and
 // Pi agent, and reports which analysis engines are present. Zero dependencies.
 import fs from 'node:fs';
 import path from 'node:path';
@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url';
 
 const HOME = os.homedir();
 const PKG_ROOT = path.resolve(fileURLToPath(import.meta.url), '..', '..');
-const SKILL_SRC = path.join(PKG_ROOT, 'skills', 'app-security-audit');
+const SKILL_SRC = path.join(PKG_ROOT, 'skills', 'probekit');
 const REA_TOOLS = path.join(HOME, '.rea-tools');
 const CLAUDE_CFG = path.join(HOME, '.claude.json');
 const PI_CFG = path.join(HOME, '.pi', 'agent', 'mcp.json');
@@ -69,14 +69,14 @@ function registerRea(configPath, withType, memOverride) {
 }
 
 function installSkill() {
-  const dst = path.join(HOME, '.claude', 'skills', 'app-security-audit');
+  const dst = path.join(HOME, '.claude', 'skills', 'probekit');
   fs.rmSync(dst, { recursive: true, force: true });
   fs.cpSync(SKILL_SRC, dst, { recursive: true });
   // Make it available to Pi agent too, as a symlink into its skills dir.
   const piSkills = path.join(HOME, '.pi', 'agent', 'skills');
   if (exists(path.join(HOME, '.pi', 'agent'))) {
     fs.mkdirSync(piSkills, { recursive: true });
-    const link = path.join(piSkills, 'app-security-audit');
+    const link = path.join(piSkills, 'probekit');
     try { fs.rmSync(link, { force: true }); } catch {}
     try { fs.symlinkSync(dst, link); } catch {}
   }
@@ -101,8 +101,8 @@ function doctor() {
   console.log(c.b('\nMCP wiring\n'));
   console.log(`  ${reaClaude ? c.g('✓') : c.r('✗')} REA registered in ~/.claude.json`);
   console.log(`  ${reaPi ? c.g('✓') : (exists(PI_CFG) ? c.r('✗') : c.dim('–'))} REA registered in ~/.pi/agent/mcp.json ${exists(PI_CFG) ? '' : c.dim('(Pi not installed)')}`);
-  const skill = exists(path.join(HOME, '.claude', 'skills', 'app-security-audit', 'SKILL.md'));
-  console.log(`  ${skill ? c.g('✓') : c.r('✗')} app-security-audit skill installed\n`);
+  const skill = exists(path.join(HOME, '.claude', 'skills', 'probekit', 'SKILL.md'));
+  console.log(`  ${skill ? c.g('✓') : c.r('✗')} probekit skill installed\n`);
 }
 
 // Non-interactive apply. opts: { claude, pi, mem }
@@ -150,7 +150,7 @@ async function init() {
     if (missing.length) { console.log(c.y(`\nMissing engines: ${missing.join(', ')}`)); runEngines = await confirm('Install the installable ones now (brew + guided Ghidra)?', false); }
 
     console.log(c.b('\nWill apply:'));
-    console.log(`  • skill → ~/.claude/skills/app-security-audit${doPi ? ' (+ Pi symlink)' : ''}`);
+    console.log(`  • skill → ~/.claude/skills/probekit${doPi ? ' (+ Pi symlink)' : ''}`);
     if (doClaude) console.log(`  • REA MCP → ~/.claude.json   (Ghidra heap ${mem})`);
     if (doPi) console.log(`  • REA MCP → ~/.pi/agent/mcp.json   (Ghidra heap ${mem})`);
     if (runEngines) console.log('  • run setup-engines first');
@@ -203,15 +203,15 @@ function uninstall() {
     const cfg = readJson(p);
     if (cfg.mcpServers && cfg.mcpServers.rea) { backup(p); delete cfg.mcpServers.rea; writeJson(p, cfg); console.log(`  ${c.g('✓')} removed REA MCP from ${label}`); }
   }
-  for (const link of [path.join(HOME, '.pi', 'agent', 'skills', 'app-security-audit')]) {
+  for (const link of [path.join(HOME, '.pi', 'agent', 'skills', 'probekit')]) {
     try { if (fs.lstatSync(link).isSymbolicLink()) { fs.rmSync(link, { force: true }); console.log(`  ${c.g('✓')} removed Pi skill link`); } } catch {}
   }
-  console.log(c.dim('  The ~/.claude/skills/app-security-audit directory was left in place; delete it manually if you want it gone.\n'));
+  console.log(c.dim('  The ~/.claude/skills/probekit directory was left in place; delete it manually if you want it gone.\n'));
 }
 
 function help() {
   console.log(`
-${c.b('probekit')} — reverse-engineering / app-security-audit stack installer
+${c.b('probekit')} v${VERSION} — app-security / reverse-engineering stack installer
 
   ${c.b('npx probekit')} [command]
 
@@ -225,6 +225,10 @@ ${c.b('probekit')} — reverse-engineering / app-security-audit stack installer
 `);
 }
 
-const cmd = process.argv[2] || 'init';
+const VERSION = (() => { try { return readJson(path.join(PKG_ROOT, 'package.json')).version || '0.0.0'; } catch { return '0.0.0'; } })();
+
+const raw = process.argv[2] || 'init';
+if (raw === '--version' || raw === '-v') { console.log(VERSION); process.exit(0); }
+const cmd = (raw === '--help' || raw === '-h') ? 'help' : raw;
 const table = { init, setup: init, install: () => install({}), doctor, 'setup-engines': setupEngines, engines: setupEngines, uninstall, help };
 (table[cmd] || help)();

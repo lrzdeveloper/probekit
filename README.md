@@ -1,11 +1,15 @@
 # probekit
 
+[![npm version](https://img.shields.io/npm/v/probekit.svg)](https://www.npmjs.com/package/probekit)
+[![CI](https://github.com/lrzdeveloper/probekit/actions/workflows/ci.yml/badge.svg)](https://github.com/lrzdeveloper/probekit/actions/workflows/ci.yml)
+[![node](https://img.shields.io/node/v/probekit.svg)](https://nodejs.org)
+
 A one-command installer for a complete **app security / reverse-engineering
 stack**, driven by an agent (Claude Code or Pi).
 
 It wires up two things:
 
-1. The **`app-security-audit` skill** — a fixed triage flow that decides *how* to
+1. The **`probekit` skill** — a fixed triage flow that decides *how* to
    audit any artifact (macOS/iOS app, Android APK, Electron app, Windows binary,
    firmware, or a GitHub repo), runs provenance/signature checks, scans for
    indicators without getting fooled by scary-but-benign strings, confirms leads
@@ -61,7 +65,7 @@ new server registration is picked up.
 
 ## What `install` changes
 
-- Copies the skill to `~/.claude/skills/app-security-audit/`, and symlinks it into
+- Copies the skill to `~/.claude/skills/probekit/`, and symlinks it into
   `~/.pi/agent/skills/` if Pi is present.
 - Registers an `rea` MCP server in `~/.claude.json` and `~/.pi/agent/mcp.json`,
   with engine paths **discovered on your machine** (not hardcoded):
@@ -97,6 +101,27 @@ app's own protections (e.g. certificate pinning is reported as a *positive*
 finding, not bypassed). Captures and any installed CA contain real secrets — the
 skill reminds the agent to redact tokens and clean up afterward.
 
+## Development & publishing
+
+```bash
+npm test            # node's built-in runner (test/smoke.test.mjs)
+node --check bin/cli.mjs
+```
+
+CI (`.github/workflows/ci.yml`) runs the tests on Node 20/22/24 for every push
+and PR. Releases are published automatically: creating a GitHub Release triggers
+`.github/workflows/publish.yml`, which runs `npm publish --provenance --access
+public` so the package ships with a signed [npm provenance](https://docs.npmjs.com/generating-provenance-statements)
+statement linking it to this repo and commit. It needs one repository secret,
+`NPM_TOKEN` (an npm automation token).
+
+To publish manually instead:
+
+```bash
+npm publish --access public      # add --provenance only from CI with OIDC
+```
+
 ## License
 
 MIT
+
