@@ -1,0 +1,33 @@
+{
+  "name": "probekit",
+  "version": "0.1.0",
+  "description": "Guided installer for a reverse-engineering / app-security-audit stack: the app-security-audit skill plus the REA MCP server (Ghidra/JADX/apktool) wired into Claude Code and Pi agent.",
+  "type": "module",
+  "bin": {
+    "probekit": "bin/cli.mjs"
+  },
+  "files": [
+    "bin/",
+    "skills/",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "security",
+    "reverse-engineering",
+    "malware-analysis",
+    "ghidra",
+    "jadx",
+    "mitmproxy",
+    "claude-code",
+    "mcp",
+    "skill"
+  ],
+  "license": "MIT",
+  "scripts": {
+    "doctor": "node bin/cli.mjs doctor"
+  }
+}
