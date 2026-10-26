@@ -27,9 +27,12 @@ tells you which engines you still need.
 
 ## Requirements
 
-- **Node `^22.23.4 || ^24.22.1 || >=26.12.1`** — this is what the pinned
-  `rea-agents@6.8.0` requires (Node spawns the REA MCP). Node 23 and 25 are not
-  supported. `probekit doctor` flags your Node if it's too old.
+- **Node 20+** to run probekit itself (the installer is a plain Node script).
+- **Node `^22.23.4 || ^24.22.1 || >=26.12.1` to actually drive REA** — the pinned
+  `rea-agents@6.8.0` requires it (Node spawns the REA MCP); Node 23 and 25 are not
+  supported. This is deliberately *not* in probekit's `engines` (so installing it
+  prints no scary `EBADENGINE` warning); instead `probekit doctor` checks your
+  Node and tells you plainly if it's too old for REA.
 - **JDK 17+** (Ghidra and JADX are Java)
 - **Ghidra 12.1.x** — REA pins the 12.1 series; 12.2+ is rejected
 - **apktool**, **mitmproxy** (for Android decoding and live network capture)
