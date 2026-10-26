@@ -1,6 +1,6 @@
 {
   "name": "@lrzdeveloper/probekit",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Installs the probekit app security skill and the REA MCP server (Ghidra, JADX, apktool) into your AI agents, such as Claude Code, Codex, Cursor and Gemini CLI. It detects the agents on your machine and lets you pick which ones to set up.",
   "type": "module",
   "bin": {

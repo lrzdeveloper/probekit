@@ -3,6 +3,7 @@
 [![npm version](https://img.shields.io/npm/v/@lrzdeveloper/probekit.svg)](https://www.npmjs.com/package/@lrzdeveloper/probekit)
 [![CI](https://github.com/lrzdeveloper/probekit/actions/workflows/ci.yml/badge.svg)](https://github.com/lrzdeveloper/probekit/actions/workflows/ci.yml)
 [![node](https://img.shields.io/node/v/@lrzdeveloper/probekit.svg)](https://nodejs.org)
+[![skills.sh](https://skills.sh/b/lrzdeveloper/probekit)](https://skills.sh/lrzdeveloper/probekit)
 
 probekit installs an app security and reverse-engineering stack into the AI
 agents you already use. It finds them on your machine and lets you choose which
@@ -152,6 +153,8 @@ also configures the REA MCP for you.
 The probekit skill is listed on [skills.sh](https://skills.sh/lrzdeveloper/probekit),
 so any agent supported by the open [`skills`](https://github.com/vercel-labs/skills)
 ecosystem can install it:
+
+[![View on skills.sh](https://img.shields.io/badge/View_on-skills.sh-000000?style=for-the-badge&labelColor=000000&logo=data%3Aimage%2Fsvg%2Bxml%3Bbase64%2CPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9Ii01IC01IDM0IDM0Ij48cGF0aCBmaWxsPSJ3aGl0ZSIgZD0iTTI0IDIyLjUyNUgwTDEyIDEuNDc1bDEyIDIxLjA1eiIvPjwvc3ZnPg%3D%3D)](https://skills.sh/lrzdeveloper/probekit/probekit)
 
 ```bash
 npx skills add lrzdeveloper/probekit            # pick agents interactively
