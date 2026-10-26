@@ -29,5 +29,5 @@ test('doctor runs and reports the engine check', () => {
 });
 
 test('an unknown command falls back to help', () => {
-  assert.match(run('wat'), /npx probekit/);
+  assert.match(run('wat'), /\[command\]/);
 });

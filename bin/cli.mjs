@@ -143,7 +143,7 @@ function doctor() {
   const rows = [
     [`node (REA needs ${REA_NODE_REQ})`, nodeSatisfiesRea(), nodeSatisfiesRea() ? process.versions.node : `${process.versions.node} — update Node so the REA MCP can run`],
     ['java (JDK 17+)', !!java, java || 'brew install openjdk'],
-    ['Ghidra 12.1.x', !!gh, gh || 'npx probekit setup-engines   (12.2+ is rejected by REA)'],
+    ['Ghidra 12.1.x', !!gh, gh || 'probekit setup-engines   (12.2+ is rejected by REA)'],
     ['jadx MCP jar', !!jar, jar || `place jadx-headless-mcp-*-all.jar in ${tilde(REA_TOOLS)} (ships with REA engine setup)`],
     ['apktool', !!which('apktool'), which('apktool') || 'brew install apktool'],
     ['mitmproxy', !!which('mitmdump'), which('mitmdump') || 'brew install mitmproxy'],
@@ -309,7 +309,7 @@ function help() {
   console.log(`
 ${c.b('probekit')} v${VERSION} — app-security / reverse-engineering stack installer
 
-  ${c.b('npx probekit')} [command]
+  ${c.b('probekit')} [command]   ${c.dim('(install: npx @lrzdeveloper/probekit)')}
 
   (no command)   Guided interactive setup (same as 'init')
   init           Guided interactive setup: detect agents, choose, confirm, apply
@@ -332,7 +332,7 @@ async function latestVersion() {
   try { const cc = readJson(cacheFile); if (cc.at && Date.now() - cc.at < 864e5 && cc.v) return cc.v; } catch {}
   try {
     const ac = new AbortController(); const t = setTimeout(() => ac.abort(), 1500);
-    const r = await fetch('https://registry.npmjs.org/probekit/latest', { signal: ac.signal });
+    const r = await fetch('https://registry.npmjs.org/@lrzdeveloper%2Fprobekit/latest', { signal: ac.signal });
     clearTimeout(t);
     if (!r.ok) return null;
     const v = (await r.json()).version;
@@ -349,10 +349,10 @@ async function notifyUpdate() {
   try {
     const a = (await rl.question(`  Update now? ${c.dim('(y/N)')}: `)).trim().toLowerCase();
     rl.close();
-    if (!a.startsWith('y')) { console.log(c.dim('  Later: `npm i -g probekit@latest`, or just run `npx probekit@latest`.')); return; }
+    if (!a.startsWith('y')) { console.log(c.dim('  Later: `npm i -g @lrzdeveloper/probekit@latest`, or just run `npx @lrzdeveloper/probekit@latest`.')); return; }
     console.log(c.dim('  Updating globally via npm…'));
-    try { execSync('npm install -g probekit@latest', { stdio: 'inherit' }); console.log(c.g('  Updated — re-run `probekit` to use the new version.')); }
-    catch { console.log(c.y('  Update failed — run `npm i -g probekit@latest` manually (or use `npx probekit@latest`).')); }
+    try { execSync('npm install -g @lrzdeveloper/probekit@latest', { stdio: 'inherit' }); console.log(c.g('  Updated — re-run `probekit` to use the new version.')); }
+    catch { console.log(c.y('  Update failed — run `npm i -g @lrzdeveloper/probekit@latest` manually (or use `npx @lrzdeveloper/probekit@latest`).')); }
   } catch { try { rl.close(); } catch {} }
 }
 

@@ -1,8 +1,8 @@
 # probekit
 
-[![npm version](https://img.shields.io/npm/v/probekit.svg)](https://www.npmjs.com/package/probekit)
+[![npm version](https://img.shields.io/npm/v/@lrzdeveloper/probekit.svg)](https://www.npmjs.com/package/@lrzdeveloper/probekit)
 [![CI](https://github.com/lrzdeveloper/probekit/actions/workflows/ci.yml/badge.svg)](https://github.com/lrzdeveloper/probekit/actions/workflows/ci.yml)
-[![node](https://img.shields.io/node/v/probekit.svg)](https://nodejs.org)
+[![node](https://img.shields.io/node/v/@lrzdeveloper/probekit.svg)](https://nodejs.org)
 
 A one-command installer for a complete **app security / reverse-engineering
 stack**, driven by whichever AI agents you have (Claude Code, Pi, Cursor,
@@ -29,8 +29,8 @@ tells you which engines you still need.
 ## Quick start
 
 ```bash
-# published to npm:
-npx probekit
+# from npm (scoped package; the installed command is just `probekit`):
+npx @lrzdeveloper/probekit
 
 # or straight from this repo, no npm release needed:
 npx github:lrzdeveloper/probekit
@@ -56,16 +56,20 @@ confirmation. Then **restart/reconnect your agent** so probekit shows up.
 ## Usage
 
 ```bash
-npx probekit                # guided interactive setup (recommended)
-npx probekit install        # non-interactive install with discovered defaults
-npx probekit doctor         # see what's present / missing
-npx probekit setup-engines  # install engines (brew + guided Ghidra)
-npx probekit uninstall      # remove MCP entries + Pi skill link
+npx @lrzdeveloper/probekit            # guided interactive setup (recommended)
+
+# install globally once, then the command is simply `probekit`:
+npm i -g @lrzdeveloper/probekit
+probekit                # guided interactive setup
+probekit install        # non-interactive install for detected agents
+probekit doctor         # see what's present / missing
+probekit setup-engines  # install engines (brew + guided Ghidra)
+probekit uninstall      # remove REA MCP + skill from all agents
 ```
 
 ### Guided setup
 
-Running `npx probekit` with no command starts a short wizard (clack-style:
+Running `probekit` (or `npx @lrzdeveloper/probekit`) with no command starts a short wizard (clack-style:
 clears between steps, keeps a running summary, animates the apply). It scans
 your engines and agents, asks **which agents** to wire — detected ones default
 to yes, so you can just press Enter — lets you confirm the Ghidra heap size, and
@@ -88,12 +92,12 @@ new server registration is picked up.
 
 ### Staying up to date
 
-`npx probekit` always resolves the latest published version, so re-running it
-picks up new releases automatically. For a global install, probekit does a
-quiet, once-a-day check against the npm registry and, when a newer version
+`npx @lrzdeveloper/probekit` always resolves the latest published version, so
+re-running it picks up new releases automatically. For a global install, probekit
+does a quiet, once-a-day check against the npm registry and, when a newer version
 exists, **offers to update right there** (`Update now?` → runs
-`npm i -g probekit@latest` for you — no separate step). The check is skipped in
-CI, when output isn't a terminal, or with `PROBEKIT_NO_UPDATE_CHECK=1`.
+`npm i -g @lrzdeveloper/probekit@latest` for you — no separate step). The check is
+skipped in CI, when output isn't a terminal, or with `PROBEKIT_NO_UPDATE_CHECK=1`.
 
 The REA engine itself is intentionally pinned (`rea-agents@6.8.0`) so a
 background REA release can't silently demand a different Ghidra or Node —
