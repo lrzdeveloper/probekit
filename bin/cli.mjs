@@ -9,6 +9,17 @@ import * as readline from 'node:readline/promises';
 import { execSync, spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import * as p from '@clack/prompts';
+import { parse as jsoncParse, modify as jsoncModify, applyEdits } from 'jsonc-parser';
+
+// Surgically set/remove a key in a JSON *or* JSONC file, preserving comments and
+// formatting. value === undefined removes it. Returns the new text, or null if
+// the file has real syntax errors (so we never clobber it).
+const JSONC_FMT = { formattingOptions: { insertSpaces: true, tabSize: 2 } };
+function jsoncEdit(text, keyPath, value) {
+  let t = text.trim() ? text : '{}';
+  if (text.trim()) { const errs = []; jsoncParse(t, errs, { allowTrailingComma: true }); if (errs.length) return null; }
+  return applyEdits(t, jsoncModify(t, keyPath, value, JSONC_FMT));
+}
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 // Run an external command with NO stdin (so an interactive prompt gets EOF and
@@ -163,23 +174,19 @@ async function installMcp(agent, mem) {
     fs.writeFileSync(agent.mcpFile, existing + (existing && !existing.endsWith('\n') ? '\n' : '') + block);
     return { ok: true, backup: b };
   }
-  // Never clobber an existing non-empty config we can't parse (e.g. JSONC with
-  // comments — Zed, Amp, VS Code). Absent/empty → create fresh.
-  let cfg = {};
-  if (exists(agent.mcpFile)) {
-    const raw = fs.readFileSync(agent.mcpFile, 'utf8');
-    if (raw.trim()) {
-      try { cfg = JSON.parse(raw); }
-      catch { return { ok: false, hint: `add it by hand to ${tilde(agent.mcpFile)} (it has comments / isn't plain JSON)` }; }
-    }
-  }
-  const b = backup(agent.mcpFile);
+  // JSON / JSONC: edit surgically (jsonc-parser) so comments AND formatting
+  // survive — works on Zed/Amp/VS Code even with comments, and only touches the
+  // `rea` key in big files like ~/.claude.json.
   const key = mcpKeyFor(fmt);
-  cfg[key] = cfg[key] || {};
-  if (fmt === 'opencode') cfg[key].rea = { type: 'local', command: ['npx', ...args], environment: env, enabled: true };
-  else if (fmt === 'zed') cfg[key].rea = { source: 'custom', command: 'npx', args, env };
-  else cfg[key].rea = { ...(agent.mcpType ? { type: agent.mcpType } : {}), command: 'npx', args, env }; // mcpServers + amp
-  writeJson(agent.mcpFile, cfg);
+  const value = fmt === 'opencode' ? { type: 'local', command: ['npx', ...args], environment: env, enabled: true }
+    : fmt === 'zed' ? { source: 'custom', command: 'npx', args, env }
+    : { ...(agent.mcpType ? { type: agent.mcpType } : {}), command: 'npx', args, env }; // mcpServers + amp
+  const text = exists(agent.mcpFile) ? fs.readFileSync(agent.mcpFile, 'utf8') : '';
+  const next = jsoncEdit(text, [key, 'rea'], value);
+  if (next === null) return { ok: false, hint: `add it by hand to ${tilde(agent.mcpFile)} — the file has JSON syntax errors` };
+  const b = backup(agent.mcpFile);
+  fs.mkdirSync(path.dirname(agent.mcpFile), { recursive: true });
+  fs.writeFileSync(agent.mcpFile, next);
   return { ok: true, backup: b };
 }
 function removeMcp(agent) {
@@ -200,9 +207,14 @@ function removeMcp(agent) {
     return true;
   }
   if (!exists(agent.mcpFile)) return false;
-  const cfg = readJson(agent.mcpFile), key = mcpKeyFor(fmt);
-  if (cfg[key] && cfg[key].rea) { backup(agent.mcpFile); delete cfg[key].rea; writeJson(agent.mcpFile, cfg); return true; }
-  return false;
+  const text = fs.readFileSync(agent.mcpFile, 'utf8'), key = mcpKeyFor(fmt);
+  const obj = jsoncParse(text) || {};
+  if (!(obj[key] && obj[key].rea)) return false;
+  const next = jsoncEdit(text, [key, 'rea'], undefined);
+  if (next === null) return false;
+  backup(agent.mcpFile);
+  fs.writeFileSync(agent.mcpFile, next);
+  return true;
 }
 function installSkillInto(agent) {
   if (!agent.skillDir) return null;
@@ -224,7 +236,8 @@ function reaInstalled(agent) {
   const fmt = agent.format || 'mcpServers';
   if (fmt === 'codex') { try { return fs.readFileSync(agent.mcpFile, 'utf8').includes('[mcp_servers.rea]'); } catch { return false; } }
   if (!exists(agent.mcpFile)) return false;
-  return !!(readJson(agent.mcpFile)[mcpKeyFor(fmt)] || {}).rea;
+  const obj = jsoncParse(fs.readFileSync(agent.mcpFile, 'utf8')) || {};
+  return !!(obj[mcpKeyFor(fmt)] || {}).rea;
 }
 const skillDirOf = agent => (agent.skillDir && exists(path.join(agent.skillDir, 'SKILL.md'))) ? agent.skillDir
   : (agent.skillGlobalDir && exists(path.join(agent.skillGlobalDir, 'SKILL.md'))) ? agent.skillGlobalDir : null;

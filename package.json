@@ -44,6 +44,7 @@
     "test": "node --test"
   },
   "dependencies": {
-    "@clack/prompts": "^1.8.1"
+    "@clack/prompts": "^1.8.1",
+    "jsonc-parser": "^3.3.1"
   }
 }

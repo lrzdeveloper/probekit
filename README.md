@@ -126,9 +126,13 @@ to the detected ones.
 | Amp | ✓ | `skills` CLI | `~/.config/amp/settings.json` · `amp.mcpServers` |
 
 Each agent's MCP config uses a **different shape** — the writer emits the one
-that agent actually understands (verified against each vendor's docs). Codex is
-TOML, so probekit lets its own CLI (`codex mcp add`) edit the file rather than
-hand-writing TOML.
+that agent actually understands (verified against each vendor's docs). JSON and
+JSONC files (Zed, Amp, VS Code can carry comments) are edited surgically with
+[`jsonc-parser`](https://github.com/microsoft/node-jsonc-parser), so your
+comments and formatting are preserved and only the `rea` key is touched. Codex
+is TOML, so probekit appends/removes the `[mcp_servers.rea]` block directly
+(its `codex` CLI is often a shim that no-ops outside its own terminal). Every
+file is backed up first.
 
 For Claude Code and Pi the skill is copied directly; for the others it's
 installed through the [`skills` CLI](https://skills.sh) (`npx skills add
