@@ -21,6 +21,26 @@ const c = { dim: s => `\x1b[2m${s}\x1b[0m`, g: s => `\x1b[32m${s}\x1b[0m`,
   r: s => `\x1b[31m${s}\x1b[0m`, y: s => `\x1b[33m${s}\x1b[0m`, b: s => `\x1b[1m${s}\x1b[0m` };
 const tilde = p => (p || '').replace(HOME, '~');
 
+// ---- tiny zero-dep TUI (clack/Pi-installer style): clear, banner, spinner ----
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const clear = () => process.stdout.write('\x1b[2J\x1b[3J\x1b[H');
+const SPIN = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+async function spin(label, ms = 420) {
+  let i = 0;
+  const t = setInterval(() => process.stdout.write(`\r  ${c.y(SPIN[i++ % SPIN.length])} ${label}\x1b[K`), 80);
+  await sleep(ms);
+  clearInterval(t);
+  process.stdout.write(`\r  ${c.g('◇')} ${label}\x1b[K\n`);
+}
+function banner() {
+  console.log(`\n  ${c.b(c.g('◆ probekit'))} ${c.dim('v' + VERSION)}`);
+  console.log(`  ${c.dim('app-security / reverse-engineering stack installer')}\n`);
+}
+function engineLine() {
+  const items = [['Ghidra', !!findGhidra()], ['jadx', !!findJadxJar()], ['apktool', !!which('apktool')], ['mitmproxy', !!which('mitmdump')], ['node', nodeSatisfiesRea()]];
+  return '  ' + items.map(([n, ok]) => (ok ? c.g('✓ ' + n) : c.r('✗ ' + n))).join(c.dim('  ·  '));
+}
+
 // ---- small shell + fs helpers ----
 const sh = cmd => { try { return execSync(cmd, { stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim(); } catch { return ''; } };
 const which = bin => sh(`command -v ${bin}`);
@@ -155,48 +175,71 @@ function install(opts = {}) {
   doctor();
 }
 
-// Guided, interactive setup. Falls back to a plain install when not a TTY.
+// Guided, interactive setup — clack/Pi-installer style: clears between steps,
+// keeps a running summary, animates the apply. Falls back to a plain install
+// when not a TTY (piped, CI). Enter always accepts the shown default.
 async function init() {
   if (!process.stdin.isTTY) { console.log(c.dim('(non-interactive input — running install for detected agents)')); return install({}); }
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-  const ask = async (q, def) => { const a = (await rl.question(`${q}${def !== undefined ? c.dim(` [${def}]`) : ''}: `)).trim(); return a || (def !== undefined ? String(def) : ''); };
-  const confirm = async (q, dy = true) => { const a = (await rl.question(`${q} ${c.dim(dy ? '(Y/n)' : '(y/N)')}: `)).trim().toLowerCase(); return a ? a.startsWith('y') : dy; };
+  const answered = [];
+  const frame = () => {
+    clear(); banner();
+    console.log(engineLine() + '\n');
+    for (const s of answered) console.log(`  ${c.g('◇')} ${c.dim(s.l + ':')} ${s.v}`);
+    if (answered.length) console.log();
+  };
+  const ask = async (q, def) => { frame(); const a = (await rl.question(`  ${c.b(c.g('?'))} ${q}${def !== undefined ? c.dim(` [${def}]`) : ''} `)).trim(); return a || (def !== undefined ? String(def) : ''); };
+  const confirm = async (q, dy = true) => { frame(); const a = (await rl.question(`  ${c.b(c.g('?'))} ${q} ${c.dim(dy ? '(Y/n)' : '(y/N)')} `)).trim().toLowerCase(); return a ? a.startsWith('y') : dy; };
   try {
-    console.log(c.b('\nprobekit — guided setup'));
-    console.log(c.dim('Detects your engines and agents, asks a few questions, shows what it will change, then applies.'));
-    doctor();
+    clear(); banner();
+    console.log(c.dim('  Press Enter to accept each default (the capitalised Y or N).'));
+    await spin('Scanning engines and agents…', 650);
 
-    console.log(c.b('Which agents should get probekit?') + c.dim('  (detected ones default to yes)'));
     const chosen = [];
     for (const a of AGENTS) {
       const det = a.detect();
-      const tag = det ? c.g(' detected') : c.dim(' not detected');
-      const extra = a.skillDir ? '' : c.dim(' — REA MCP only');
-      if (await confirm(`  ${a.label}${tag}${extra}`, det)) chosen.push(a);
+      const tag = det ? c.g('(detected)') : c.dim('(not detected)');
+      const extra = a.skillDir ? '' : c.dim(' · REA MCP only');
+      const ok = await confirm(`${a.label} ${tag}${extra}`, det);
+      answered.push({ l: a.label, v: ok ? c.g('yes') : c.dim('no') });
+      if (ok) chosen.push(a);
     }
-    if (!chosen.length) { console.log(c.y('\nNo agents selected — nothing to do.')); return; }
+    if (!chosen.length) { frame(); console.log(c.y('  Nothing selected — nothing to do.\n')); return; }
 
-    const ram = totalMemGB();
-    let mem = await ask(`Ghidra heap size${ram ? ` (detected ~${ram.toFixed(0)}GB RAM)` : ''}`, `${ghidraMemG()}G`);
+    let mem = await ask('Ghidra heap size', `${ghidraMemG()}G`);
     if (!/g$/i.test(mem)) mem = (mem.replace(/[^0-9]/g, '') || ghidraMemG()) + 'G';
+    answered.push({ l: 'Ghidra heap', v: mem });
 
     const missing = [!findGhidra() && 'Ghidra 12.1.x', !findJadxJar() && 'jadx MCP jar', !which('apktool') && 'apktool', !which('mitmdump') && 'mitmproxy'].filter(Boolean);
     let runEngines = false;
-    if (missing.length) { console.log(c.y(`\nMissing engines: ${missing.join(', ')}`)); runEngines = await confirm('Install the installable ones now (brew + guided Ghidra)?', false); }
+    if (missing.length) { runEngines = await confirm(`Install missing engines now (${missing.join(', ')})?`, false); answered.push({ l: 'Install engines', v: runEngines ? c.g('yes') : c.dim('no') }); }
 
-    console.log(c.b('\nWill apply:'));
-    for (const a of chosen) console.log(`  • ${a.label}: REA MCP → ${tilde(a.mcpFile)}${a.skillDir ? ' + skill' : ''}   ${c.dim(`(Ghidra heap ${mem})`)}`);
-    if (runEngines) console.log('  • run setup-engines first');
-    console.log(c.dim('  (every config file is backed up before writing)'));
-    if (!nodeSatisfiesRea()) console.log(c.y(`  note: your Node ${process.versions.node} is below REA's requirement — doctor will flag it until you update Node`));
-    if (!await confirm('\nProceed?', true)) { console.log(c.y('Aborted — nothing was changed.')); return; }
-
+    // summary screen (no frame() so it stays put while we confirm)
+    clear(); banner();
+    console.log(engineLine() + '\n');
+    console.log(c.b('  Will apply:'));
+    for (const a of chosen) console.log(`    • ${a.label} → REA MCP${a.skillDir ? c.g(' + skill') : ''}  ${c.dim(`(Ghidra heap ${mem})`)}`);
+    if (runEngines) console.log('    • install missing engines first');
+    console.log(c.dim('    every config file is backed up before writing'));
+    if (!nodeSatisfiesRea()) console.log(c.y(`\n  ⚠ Node ${process.versions.node} is below REA's requirement (${REA_NODE_REQ}).`));
+    const ans = (await rl.question(`\n  ${c.b(c.g('?'))} Proceed? ${c.dim('(Y/n)')} `)).trim().toLowerCase();
+    if (ans && !ans.startsWith('y')) { console.log(c.y('\n  Aborted — nothing was changed.\n')); return; }
     rl.close();
+
     if (runEngines) setupEngines();
-    install({ agents: chosen.map(a => a.id), mem });
+    clear(); banner();
+    for (const a of chosen) {
+      await spin(`Configuring ${a.label}…`, 260);
+      registerReaIn(a, mem);
+      if (a.skillDir) installSkillInto(a);
+    }
+    console.log(`\n  ${c.g('✓')} ${c.b('probekit installed')} for ${chosen.map(a => a.label).join(', ')}.`);
+    if (!nodeSatisfiesRea()) console.log(c.y(`\n  ⚠ Update Node (${REA_NODE_REQ}) — e.g. \`brew upgrade node\` — then reconnect; REA stays unhealthy until then.`));
+    console.log(c.dim('\n  Restart / reconnect your agent(s) to load the REA MCP.\n'));
     return;
   } catch (e) {
-    if (e && e.code === 'ABORT_ERR') { console.log(c.y('\nAborted — nothing was changed.')); return; }
+    // stdin closed mid-flow (Ctrl+D, piped EOF) — nothing was written yet.
+    if (e && (e.code === 'ABORT_ERR' || e.code === 'ERR_USE_AFTER_CLOSE')) { console.log(c.y('\n  Aborted — nothing was changed.\n')); return; }
     throw e;
   } finally { try { rl.close(); } catch {} }
 }
