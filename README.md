@@ -111,26 +111,30 @@ Every selected agent **always gets both** — the REA MCP *and* the skill (the
 skill is useless without REA). The guided setup detects your agents and defaults
 to the detected ones.
 
-| Agent | REA MCP | Skill delivered via | MCP config file |
+| Agent | REA MCP | Skill delivered via | MCP config (key / format) |
 |---|---|---|---|
-| Claude Code | ✓ | native (`SKILL.md`) | `~/.claude.json` |
-| Pi agent | ✓ | native (`SKILL.md`) | `~/.pi/agent/mcp.json` |
-| Cursor | ✓ | `skills` CLI | `~/.cursor/mcp.json` |
-| Windsurf | ✓ | `skills` CLI | `~/.codeium/windsurf/mcp_config.json` |
-| Gemini CLI | ✓ | `skills` CLI | `~/.gemini/settings.json` |
-| GitHub Copilot CLI | ✓ | `skills` CLI | `~/.copilot/mcp-config.json` |
-| Antigravity | ✓ | `skills` CLI | `~/.gemini/antigravity/mcp_config.json` |
+| Claude Code | ✓ | native (`SKILL.md`) | `~/.claude.json` · `mcpServers` |
+| Pi agent | ✓ | native (`SKILL.md`) | `~/.pi/agent/mcp.json` · `mcpServers` |
+| Cursor | ✓ | `skills` CLI | `~/.cursor/mcp.json` · `mcpServers` |
+| Windsurf | ✓ | `skills` CLI | `~/.codeium/windsurf/mcp_config.json` · `mcpServers` |
+| Gemini CLI | ✓ | `skills` CLI | `~/.gemini/settings.json` · `mcpServers` |
+| GitHub Copilot CLI | ✓ | `skills` CLI | `~/.copilot/mcp-config.json` · `mcpServers` |
+| Antigravity | ✓ | `skills` CLI | `~/.gemini/antigravity/mcp_config.json` · `mcpServers` |
+| Codex | ✓ | `skills` CLI | `~/.codex/config.toml` · via `codex mcp add` |
+| Zed | ✓ | `skills` CLI | `~/.config/zed/settings.json` · `context_servers` |
+| OpenCode | ✓ | `skills` CLI | `~/.config/opencode/opencode.json` · `mcp` |
+| Amp | ✓ | `skills` CLI | `~/.config/amp/settings.json` · `amp.mcpServers` |
 
-For Claude Code and Pi probekit copies the skill directly; for the others it
-installs it through the [`skills` CLI](https://skills.sh) (`npx skills add
-lrzdeveloper/probekit`), which covers **80+ agents**. See below.
+Each agent's MCP config uses a **different shape** — the writer emits the one
+that agent actually understands (verified against each vendor's docs). Codex is
+TOML, so probekit lets its own CLI (`codex mcp add`) edit the file rather than
+hand-writing TOML.
 
-**The skill reaches 80+ agents** (via skills.sh); the table above is the set
-where probekit *also auto-wires the REA MCP*. All seven share the standard
-`mcpServers` JSON config, so they're written safely by the same code. More MCP
-targets whose config uses a different shape (Codex → TOML, Zed →
-`context_servers`, OpenCode → `mcp`, Amp → nested) are added one verified
-adapter at a time — writing the wrong shape would corrupt a user's config.
+For Claude Code and Pi the skill is copied directly; for the others it's
+installed through the [`skills` CLI](https://skills.sh) (`npx skills add
+lrzdeveloper/probekit`), which covers **80+ agents** — so the *skill* reaches far
+more tools than the eleven above; those eleven are where probekit *also* wires
+the REA MCP automatically.
 
 ## The skill on 80+ agents (skills.sh)
 

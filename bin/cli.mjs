@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import * as readline from 'node:readline/promises';
-import { execSync } from 'node:child_process';
+import { execSync, execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import * as p from '@clack/prompts';
 
@@ -60,6 +60,19 @@ const AGENTS = [
   { id: 'antigravity', label: 'Antigravity',
     detect: () => exists(path.join(HOME, '.gemini', 'antigravity')),
     mcpFile: path.join(HOME, '.gemini', 'antigravity', 'mcp_config.json'), skillsAgent: 'antigravity' },
+  // Different MCP config shapes — one verified adapter each (see installMcp).
+  { id: 'codex', label: 'Codex', format: 'codex',
+    detect: () => exists(path.join(HOME, '.codex')),
+    mcpFile: path.join(HOME, '.codex', 'config.toml'), skillsAgent: 'codex' },
+  { id: 'zed', label: 'Zed', format: 'zed',
+    detect: () => exists(path.join(HOME, '.config', 'zed')),
+    mcpFile: path.join(HOME, '.config', 'zed', 'settings.json'), skillsAgent: 'zed' },
+  { id: 'opencode', label: 'OpenCode', format: 'opencode',
+    detect: () => exists(path.join(HOME, '.config', 'opencode')),
+    mcpFile: path.join(HOME, '.config', 'opencode', 'opencode.json'), skillsAgent: 'opencode' },
+  { id: 'amp', label: 'Amp', format: 'amp',
+    detect: () => exists(path.join(HOME, '.config', 'amp')),
+    mcpFile: path.join(HOME, '.config', 'amp', 'settings.json'), skillsAgent: 'amp' },
 ];
 const SKILLS_REPO = 'lrzdeveloper/probekit'; // for `npx skills add <repo>`
 const byId = id => AGENTS.find(a => a.id === id);
@@ -105,14 +118,45 @@ function buildEnv(memOverride) {
 }
 
 // ---- per-agent actions ----
-function reaEntry(agent, mem) { return { ...(agent.mcpType ? { type: agent.mcpType } : {}), command: 'npx', args: ['-y', REA_VERSION, 'mcp'], env: buildEnv(mem) }; }
-function registerReaIn(agent, mem) {
+// Each agent's config uses a different shape; mcpKeyFor + installMcp/removeMcp
+// write the one that agent actually understands (verified against each vendor's
+// docs). Codex is TOML, so we let its own CLI edit the file.
+const mcpKeyFor = fmt => fmt === 'amp' ? 'amp.mcpServers' : fmt === 'zed' ? 'context_servers' : fmt === 'opencode' ? 'mcp' : 'mcpServers';
+function installMcp(agent, mem) {
+  const env = buildEnv(mem);
+  const args = ['-y', REA_VERSION, 'mcp'];
+  const fmt = agent.format || 'mcpServers';
+  if (fmt === 'codex') {
+    const envArgs = Object.entries(env).flatMap(([k, v]) => ['--env', `${k}=${v}`]);
+    try { execFileSync('codex', ['mcp', 'add', 'rea', ...envArgs, '--', 'npx', ...args], { stdio: 'ignore' }); return { ok: true }; }
+    catch { return { ok: false, hint: `codex mcp add rea -- npx ${args.join(' ')}` }; }
+  }
+  // Never clobber an existing non-empty config we can't parse (e.g. JSONC with
+  // comments — Zed, Amp, VS Code). Absent/empty → create fresh.
+  let cfg = {};
+  if (exists(agent.mcpFile)) {
+    const raw = fs.readFileSync(agent.mcpFile, 'utf8');
+    if (raw.trim()) {
+      try { cfg = JSON.parse(raw); }
+      catch { return { ok: false, hint: `add it by hand to ${tilde(agent.mcpFile)} (it has comments / isn't plain JSON)` }; }
+    }
+  }
   const b = backup(agent.mcpFile);
-  const cfg = readJson(agent.mcpFile);
-  cfg.mcpServers = cfg.mcpServers || {};
-  cfg.mcpServers.rea = reaEntry(agent, mem);
+  const key = mcpKeyFor(fmt);
+  cfg[key] = cfg[key] || {};
+  if (fmt === 'opencode') cfg[key].rea = { type: 'local', command: ['npx', ...args], environment: env, enabled: true };
+  else if (fmt === 'zed') cfg[key].rea = { source: 'custom', command: 'npx', args, env };
+  else cfg[key].rea = { ...(agent.mcpType ? { type: agent.mcpType } : {}), command: 'npx', args, env }; // mcpServers + amp
   writeJson(agent.mcpFile, cfg);
-  return b;
+  return { ok: true, backup: b };
+}
+function removeMcp(agent) {
+  const fmt = agent.format || 'mcpServers';
+  if (fmt === 'codex') { try { execFileSync('codex', ['mcp', 'remove', 'rea'], { stdio: 'ignore' }); return true; } catch { return false; } }
+  if (!exists(agent.mcpFile)) return false;
+  const cfg = readJson(agent.mcpFile), key = mcpKeyFor(fmt);
+  if (cfg[key] && cfg[key].rea) { backup(agent.mcpFile); delete cfg[key].rea; writeJson(agent.mcpFile, cfg); return true; }
+  return false;
 }
 function installSkillInto(agent) {
   if (!agent.skillDir) return null;
@@ -130,7 +174,12 @@ function installSkillFor(agent) {
   }
   return null; // e.g. Claude Desktop — no skill mechanism, MCP only
 }
-const reaInstalled = agent => exists(agent.mcpFile) && !!(readJson(agent.mcpFile).mcpServers || {}).rea;
+function reaInstalled(agent) {
+  const fmt = agent.format || 'mcpServers';
+  if (fmt === 'codex') { try { return fs.readFileSync(agent.mcpFile, 'utf8').includes('[mcp_servers.rea]'); } catch { return false; } }
+  if (!exists(agent.mcpFile)) return false;
+  return !!(readJson(agent.mcpFile)[mcpKeyFor(fmt)] || {}).rea;
+}
 const skillInstalled = agent => !!agent.skillDir && exists(path.join(agent.skillDir, 'SKILL.md'));
 // Agents only load/unload probekit on restart — always tell the user to reload.
 const reloadNote = (labels, appearing) => c.dim(`\n  Restart / reconnect ${labels.length ? labels.join(', ') : 'your agent(s)'} ${appearing ? 'so probekit (its skill + REA tools) shows up.' : 'so probekit is fully unloaded.'}\n`);
@@ -167,8 +216,9 @@ function install(opts = {}) {
   console.log(c.b('\nprobekit — install\n'));
   if (!agents.length) { console.log(c.y('  No agents selected or detected — nothing to do.\n')); return; }
   for (const a of agents) {
-    const b = registerReaIn(a, mem);
-    console.log(`  ${c.g('✓')} REA MCP → ${tilde(a.mcpFile)} ${b ? c.dim(`(backup ${path.basename(b)})`) : ''}`);
+    const m = installMcp(a, mem);
+    if (m.ok) console.log(`  ${c.g('✓')} REA MCP → ${tilde(a.mcpFile)} ${m.backup ? c.dim(`(backup ${path.basename(m.backup)})`) : ''}`);
+    else console.log(c.y(`  ! REA MCP not set for ${a.label} — run: ${m.hint}`));
     const sk = installSkillFor(a);
     if (sk?.how === 'native') console.log(`  ${c.g('✓')} skill  → ${tilde(sk.where)}`);
     else if (sk?.how === 'skills-cli') console.log(`  ${c.g('✓')} skill  → via skills CLI (${a.skillsAgent})`);
@@ -246,13 +296,15 @@ async function init() {
     }
     for (const a of agents) {
       const s = p.spinner(); s.start(`Configuring ${a.label}`);
-      registerReaIn(a, mem);
+      const m = installMcp(a, mem);
       const sk = installSkillFor(a);
-      const tag = sk?.how === 'native' ? 'REA MCP + skill'
-        : sk?.how === 'skills-cli' ? 'REA MCP + skill (via skills CLI)'
-        : sk?.how === 'skills-cli-failed' ? 'REA MCP (skill install failed — run `npx skills add` manually)'
-        : 'REA MCP';
-      s.stop(`${a.label} — ${tag}`);
+      const mcpTag = m.ok ? 'REA MCP' : 'REA MCP (manual step)';
+      const skTag = sk?.how === 'native' ? ' + skill'
+        : sk?.how === 'skills-cli' ? ' + skill (via skills CLI)'
+        : sk?.how === 'skills-cli-failed' ? ' (skill failed — run `npx skills add` manually)'
+        : '';
+      s.stop(`${a.label} — ${mcpTag}${skTag}`);
+      if (!m.ok) p.log.warn(`${a.label}: ${m.hint}`);
     }
 
     const nv = (sh('node -v') || '').replace(/^v/, '');
@@ -301,7 +353,7 @@ function uninstall() {
   const touched = [];
   for (const a of AGENTS) {
     let hit = false;
-    if (reaInstalled(a)) { const cfg = readJson(a.mcpFile); backup(a.mcpFile); delete cfg.mcpServers.rea; writeJson(a.mcpFile, cfg); console.log(`  ${c.g('✓')} removed REA MCP from ${tilde(a.mcpFile)}`); hit = true; }
+    if (removeMcp(a)) { console.log(`  ${c.g('✓')} removed REA MCP from ${a.label}`); hit = true; }
     if (skillInstalled(a)) { fs.rmSync(a.skillDir, { recursive: true, force: true }); console.log(`  ${c.g('✓')} removed skill from ${tilde(a.skillDir)}`); hit = true; }
     if (hit) touched.push(a.label);
   }
