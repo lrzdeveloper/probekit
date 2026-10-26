@@ -94,15 +94,18 @@ function totalMemGB() {
 }
 const ghidraMemG = () => { const t = totalMemGB(); return t ? Math.max(4, Math.min(16, Math.floor(t / 2))) : 8; };
 
-// Does the running Node satisfy what the pinned REA needs? (Node spawns the MCP.)
-function nodeSatisfiesRea() {
-  const [maj, min, pat] = process.versions.node.split('.').map(Number);
-  const ge = (a, b, c) => maj > a || (maj === a && (min > b || (min === b && pat >= c)));
+// Does a Node version satisfy what the pinned REA needs? (Node spawns the MCP.)
+function nodeSatisfiesReaV(ver) {
+  const [maj, min, pat] = String(ver || '').split('.').map(Number);
+  const ge = (a, b, d) => maj > a || (maj === a && (min > b || (min === b && pat >= d)));
   if (maj === 22) return ge(22, 23, 4);
   if (maj === 24) return ge(24, 22, 1);
   if (maj >= 26) return ge(26, 12, 1);
   return false; // 23 and 25 are unsupported
 }
+const nodeSatisfiesRea = () => nodeSatisfiesReaV(process.versions.node);
+// Is the node on PATH managed by Homebrew? (only then can we safely `brew upgrade node`)
+const nodeViaBrew = () => { const b = sh('brew --prefix 2>/dev/null'); const n = which('node'); return !!b && !!n && n.startsWith(b); };
 
 function buildEnv(memOverride) {
   const env = {};
@@ -214,19 +217,32 @@ async function init() {
     let runEngines = false;
     if (missing.length) { runEngines = await confirm(`Install missing engines now (${missing.join(', ')})?`, false); answered.push({ l: 'Install engines', v: runEngines ? c.g('yes') : c.dim('no') }); }
 
+    // Offer a Node upgrade only when it's too old AND brew-managed (safe to upgrade).
+    let upgradeNode = false;
+    if (!nodeSatisfiesRea() && nodeViaBrew()) {
+      upgradeNode = await confirm(`Node ${process.versions.node} is too old for REA — run \`brew upgrade node\` now? ${c.dim('(system-wide, affects all your Node projects)')}`, false);
+      answered.push({ l: 'Upgrade Node', v: upgradeNode ? c.g('yes') : c.dim('no') });
+    }
+
     // summary screen (no frame() so it stays put while we confirm)
     clear(); banner();
     console.log(engineLine() + '\n');
     console.log(c.b('  Will apply:'));
     for (const a of chosen) console.log(`    • ${a.label} → REA MCP${a.skillDir ? c.g(' + skill') : ''}  ${c.dim(`(Ghidra heap ${mem})`)}`);
     if (runEngines) console.log('    • install missing engines first');
+    if (upgradeNode) console.log('    • ' + c.y('brew upgrade node') + c.dim(' (system-wide) first'));
     console.log(c.dim('    every config file is backed up before writing'));
-    if (!nodeSatisfiesRea()) console.log(c.y(`\n  ⚠ Node ${process.versions.node} is below REA's requirement (${REA_NODE_REQ}).`));
+    if (!nodeSatisfiesRea() && !upgradeNode) console.log(c.y(`\n  ⚠ Node ${process.versions.node} is below REA's requirement (${REA_NODE_REQ})${nodeViaBrew() ? '' : ' — upgrade it via your Node manager'}.`));
     const ans = (await rl.question(`\n  ${c.b(c.g('?'))} Proceed? ${c.dim('(Y/n)')} `)).trim().toLowerCase();
     if (ans && !ans.startsWith('y')) { console.log(c.y('\n  Aborted — nothing was changed.\n')); return; }
     rl.close();
 
     if (runEngines) setupEngines();
+    if (upgradeNode) {
+      clear(); banner();
+      console.log(c.b('  Upgrading Node via Homebrew…') + c.dim('  (one-time, system-wide; brew output follows)\n'));
+      try { execSync('brew upgrade node', { stdio: 'inherit' }); } catch { console.log(c.y('\n  brew upgrade node failed — upgrade Node manually.')); }
+    }
     clear(); banner();
     for (const a of chosen) {
       await spin(`Configuring ${a.label}…`, 260);
@@ -234,7 +250,9 @@ async function init() {
       if (a.skillDir) installSkillInto(a);
     }
     console.log(`\n  ${c.g('✓')} ${c.b('probekit installed')} for ${chosen.map(a => a.label).join(', ')}.`);
-    if (!nodeSatisfiesRea()) console.log(c.y(`\n  ⚠ Update Node (${REA_NODE_REQ}) — e.g. \`brew upgrade node\` — then reconnect; REA stays unhealthy until then.`));
+    const nv = (sh('node -v') || '').replace(/^v/, '');
+    if (upgradeNode && nodeSatisfiesReaV(nv)) console.log(c.g(`\n  ✓ Node is now ${nv} — satisfies REA.`));
+    else if (!nodeSatisfiesRea()) console.log(c.y(`\n  ⚠ Update Node (${REA_NODE_REQ})${nodeViaBrew() ? ' — `brew upgrade node`' : ' via your Node manager'} — then reconnect; REA stays unhealthy until then.`));
     console.log(c.dim('\n  Restart / reconnect your agent(s) to load the REA MCP.\n'));
     return;
   } catch (e) {

@@ -51,13 +51,16 @@ npx probekit uninstall      # remove MCP entries + Pi skill link
 
 ### Guided setup
 
-Running `npx probekit` with no command starts a short wizard: it shows the
-engine check, asks which agents to wire (Claude Code and/or Pi — only the ones
-it detects), lets you confirm the Ghidra heap size, offers to install any
-missing engines, then prints exactly what it will change and asks before
-writing. Every config file is backed up first. When stdin isn't a terminal
-(piped, CI), it falls back to a non-interactive `install` with discovered
-defaults.
+Running `npx probekit` with no command starts a short wizard (clack-style:
+clears between steps, keeps a running summary, animates the apply). It scans
+your engines and agents, asks **which agents** to wire — detected ones default
+to yes, so you can just press Enter — lets you confirm the Ghidra heap size, and
+offers to install any missing engines. If your Node is too old for REA **and**
+it's Homebrew-managed, it also offers (default no) to run `brew upgrade node`
+for you; otherwise it just tells you the version to install. It then prints
+exactly what it will change and asks before writing. Every config file is backed
+up first. When stdin isn't a terminal (piped, CI), it falls back to a
+non-interactive `install` for the detected agents.
 
 Or clone and run locally:
 
