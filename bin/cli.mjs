@@ -51,6 +51,15 @@ const AGENTS = [
   { id: 'windsurf', label: 'Windsurf',
     detect: () => exists(path.join(HOME, '.codeium', 'windsurf')),
     mcpFile: path.join(HOME, '.codeium', 'windsurf', 'mcp_config.json'), skillsAgent: 'windsurf' },
+  { id: 'gemini-cli', label: 'Gemini CLI',
+    detect: () => exists(path.join(HOME, '.gemini', 'settings.json')),
+    mcpFile: path.join(HOME, '.gemini', 'settings.json'), skillsAgent: 'gemini-cli' },
+  { id: 'github-copilot', label: 'GitHub Copilot CLI',
+    detect: () => exists(path.join(HOME, '.copilot')),
+    mcpFile: path.join(HOME, '.copilot', 'mcp-config.json'), skillsAgent: 'github-copilot' },
+  { id: 'antigravity', label: 'Antigravity',
+    detect: () => exists(path.join(HOME, '.gemini', 'antigravity')),
+    mcpFile: path.join(HOME, '.gemini', 'antigravity', 'mcp_config.json'), skillsAgent: 'antigravity' },
 ];
 const SKILLS_REPO = 'lrzdeveloper/probekit'; // for `npx skills add <repo>`
 const byId = id => AGENTS.find(a => a.id === id);

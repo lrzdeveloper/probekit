@@ -3,11 +3,12 @@
 [![npm version](https://img.shields.io/npm/v/@lrzdeveloper/probekit.svg)](https://www.npmjs.com/package/@lrzdeveloper/probekit)
 [![CI](https://github.com/lrzdeveloper/probekit/actions/workflows/ci.yml/badge.svg)](https://github.com/lrzdeveloper/probekit/actions/workflows/ci.yml)
 [![node](https://img.shields.io/node/v/@lrzdeveloper/probekit.svg)](https://nodejs.org)
-[![skills.sh](https://skills.sh/b/lrzdeveloper/probekit)](https://skills.sh/lrzdeveloper/probekit)
 
 A one-command installer for a complete **app security / reverse-engineering
-stack**, driven by whichever AI agents you have (Claude Code, Pi, Cursor,
-Windsurf) — detected automatically, chosen by you with a searchable multiselect.
+stack**, driven by whichever AI agents you have — detected automatically, chosen
+by you with a searchable multiselect. The skill reaches **80+ agents** (via
+[skills.sh](https://skills.sh)); the REA MCP is auto-wired for a growing set of
+them (Claude Code, Pi, Cursor, Windsurf, Gemini CLI, GitHub Copilot, Antigravity…).
 
 It wires up two things:
 
@@ -116,10 +117,20 @@ to the detected ones.
 | Pi agent | ✓ | native (`SKILL.md`) | `~/.pi/agent/mcp.json` |
 | Cursor | ✓ | `skills` CLI | `~/.cursor/mcp.json` |
 | Windsurf | ✓ | `skills` CLI | `~/.codeium/windsurf/mcp_config.json` |
+| Gemini CLI | ✓ | `skills` CLI | `~/.gemini/settings.json` |
+| GitHub Copilot CLI | ✓ | `skills` CLI | `~/.copilot/mcp-config.json` |
+| Antigravity | ✓ | `skills` CLI | `~/.gemini/antigravity/mcp_config.json` |
 
 For Claude Code and Pi probekit copies the skill directly; for the others it
 installs it through the [`skills` CLI](https://skills.sh) (`npx skills add
 lrzdeveloper/probekit`), which covers **80+ agents**. See below.
+
+**The skill reaches 80+ agents** (via skills.sh); the table above is the set
+where probekit *also auto-wires the REA MCP*. All seven share the standard
+`mcpServers` JSON config, so they're written safely by the same code. More MCP
+targets whose config uses a different shape (Codex → TOML, Zed →
+`context_servers`, OpenCode → `mcp`, Amp → nested) are added one verified
+adapter at a time — writing the wrong shape would corrupt a user's config.
 
 ## The skill on 80+ agents (skills.sh)
 
