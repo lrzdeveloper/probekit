@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import * as readline from 'node:readline/promises';
-import { execSync, execFileSync, execFile } from 'node:child_process';
+import { execSync, execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import * as p from '@clack/prompts';
@@ -134,13 +134,18 @@ async function installMcp(agent, mem) {
   const args = ['-y', REA_VERSION, 'mcp'];
   const fmt = agent.format || 'mcpServers';
   if (fmt === 'codex') {
-    // Already present → leave the working TOML entry alone (idempotent; avoids a
-    // duplicate error and never touches a shimmed/interactive `codex`).
+    // The `codex` CLI is often a shim (e.g. cmux) that no-ops outside its own
+    // terminal, so we edit config.toml directly. Idempotent: skip if present.
     if (reaInstalled(agent)) return { ok: true, note: 'already configured' };
-    if (!which('codex')) return { ok: false, hint: `codex CLI not on PATH — add by hand: codex mcp add rea -- npx ${args.join(' ')}` };
-    const envArgs = Object.entries(env).flatMap(([k, v]) => ['--env', `${k}=${v}`]);
-    if (await run('codex', ['mcp', 'add', 'rea', ...envArgs, '--', 'npx', ...args])) return { ok: true };
-    return { ok: false, hint: `codex mcp add rea -- npx ${args.join(' ')}` };
+    const b = backup(agent.mcpFile);
+    const q = s => JSON.stringify(String(s)); // TOML basic string (JSON-compatible escaping)
+    let block = `\n[mcp_servers.rea]\ncommand = "npx"\nargs = [ ${args.map(q).join(', ')} ]\nstartup_timeout_sec = 60\n`;
+    const envEntries = Object.entries(env);
+    if (envEntries.length) block += `\n[mcp_servers.rea.env]\n${envEntries.map(([k, v]) => `${k} = ${q(v)}`).join('\n')}\n`;
+    fs.mkdirSync(path.dirname(agent.mcpFile), { recursive: true });
+    const existing = exists(agent.mcpFile) ? fs.readFileSync(agent.mcpFile, 'utf8') : '';
+    fs.writeFileSync(agent.mcpFile, existing + (existing && !existing.endsWith('\n') ? '\n' : '') + block);
+    return { ok: true, backup: b };
   }
   // Never clobber an existing non-empty config we can't parse (e.g. JSONC with
   // comments — Zed, Amp, VS Code). Absent/empty → create fresh.
@@ -163,7 +168,21 @@ async function installMcp(agent, mem) {
 }
 function removeMcp(agent) {
   const fmt = agent.format || 'mcpServers';
-  if (fmt === 'codex') { try { execFileSync('codex', ['mcp', 'remove', 'rea'], { stdio: 'ignore' }); return true; } catch { return false; } }
+  if (fmt === 'codex') {
+    if (!exists(agent.mcpFile)) return false;
+    const raw = fs.readFileSync(agent.mcpFile, 'utf8');
+    if (!raw.includes('[mcp_servers.rea]')) return false;
+    backup(agent.mcpFile);
+    const out = []; let skip = false;
+    for (const line of raw.split('\n')) {
+      const t = line.trim();
+      if (t === '[mcp_servers.rea]' || t.startsWith('[mcp_servers.rea.')) { skip = true; continue; }
+      if (skip && t.startsWith('[') && !t.startsWith('[mcp_servers.rea')) skip = false;
+      if (!skip) out.push(line);
+    }
+    fs.writeFileSync(agent.mcpFile, out.join('\n'));
+    return true;
+  }
   if (!exists(agent.mcpFile)) return false;
   const cfg = readJson(agent.mcpFile), key = mcpKeyFor(fmt);
   if (cfg[key] && cfg[key].rea) { backup(agent.mcpFile); delete cfg[key].rea; writeJson(agent.mcpFile, cfg); return true; }
