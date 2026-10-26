@@ -314,11 +314,14 @@ async function init() {
     }
 
     const nv = (sh('node -v') || '').replace(/^v/, '');
-    const lines = [`Restart / reconnect ${agents.map(a => a.label).join(', ')} so probekit shows up.`];
-    if (upgradeNode && nodeSatisfiesReaV(nv)) lines.push(`Node is now ${nv} — satisfies REA.`);
-    else if (!nodeSatisfiesRea()) lines.push(`Update Node (${REA_NODE_REQ})${nodeViaBrew() ? ' — brew upgrade node' : ''} before REA is healthy.`);
-    lines.push(`To add probekit to another agent later (80+ supported), run:  npx skills add ${SKILLS_REPO}`);
-    p.outro(lines.join('\n'));
+    const nodeOkNow = upgradeNode ? nodeSatisfiesReaV(nv) : nodeSatisfiesRea();
+    if (upgradeNode && nodeOkNow) p.log.success(`Node is now ${nv} — satisfies REA.`);
+
+    const steps = [`Restart / reconnect ${agents.map(a => a.label).join(', ')} so probekit loads.`];
+    if (!nodeOkNow) steps.push(`Update Node to ${REA_NODE_REQ}${nodeViaBrew() ? ' — run \`brew upgrade node\`' : ' via your Node manager'}. REA stays unhealthy until then.`);
+    p.note(steps.map((s, i) => `${c.dim(`${i + 1}.`)} ${s}`).join('\n'), 'Next steps');
+    p.note(`${c.b(`npx skills add ${SKILLS_REPO}`)}\n${c.dim('Installs the probekit skill on any of 80+ other coding agents.')}`, 'Add probekit elsewhere');
+    p.outro(c.g(`✓ probekit ready on ${agents.map(a => a.label).join(', ')}`));
     return;
   } catch (e) {
     if (e && (e.code === 'ABORT_ERR' || e.code === 'ERR_USE_AFTER_CLOSE')) return bail();
