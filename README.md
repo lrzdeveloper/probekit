@@ -44,7 +44,7 @@ confirmation. Then **restart/reconnect your agent** so probekit shows up.
 
 ## Requirements
 
-- **Node 20+** to run probekit itself (the installer is a plain Node script).
+- **Node 20.12+** to run probekit itself (the installer is a plain Node script).
 - **Node `^22.23.4 || ^24.22.1 || >=26.12.1` to actually drive REA** — the pinned
   `rea-agents@6.8.0` requires it (Node spawns the REA MCP); Node 23 and 25 are not
   supported. This is deliberately *not* in probekit's `engines` (so installing it
@@ -120,7 +120,7 @@ to the detected ones.
 | Gemini CLI | ✓ | `skills` CLI | `~/.gemini/settings.json` · `mcpServers` |
 | GitHub Copilot CLI | ✓ | `skills` CLI | `~/.copilot/mcp-config.json` · `mcpServers` |
 | Antigravity | ✓ | `skills` CLI | `~/.gemini/antigravity/mcp_config.json` · `mcpServers` |
-| Codex | ✓ | `skills` CLI | `~/.codex/config.toml` · via `codex mcp add` |
+| Codex | ✓ | `skills` CLI | `~/.codex/config.toml` · `[mcp_servers.rea]` |
 | Zed | ✓ | `skills` CLI | `~/.config/zed/settings.json` · `context_servers` |
 | OpenCode | ✓ | `skills` CLI | `~/.config/opencode/opencode.json` · `mcp` |
 | Amp | ✓ | `skills` CLI | `~/.config/amp/settings.json` · `amp.mcpServers` |
@@ -130,9 +130,11 @@ that agent actually understands (verified against each vendor's docs). JSON and
 JSONC files (Zed, Amp, VS Code can carry comments) are edited surgically with
 [`jsonc-parser`](https://github.com/microsoft/node-jsonc-parser), so your
 comments and formatting are preserved and only the `rea` key is touched. Codex
-is TOML, so probekit appends/removes the `[mcp_servers.rea]` block directly
-(its `codex` CLI is often a shim that no-ops outside its own terminal). Every
-file is backed up first.
+is TOML, so probekit replaces/removes only the `[mcp_servers.rea]` tables with a
+TOML-aware edit (checked with [`smol-toml`](https://github.com/squirrelchat/smol-toml)
+before writing), leaving the rest of the file and its comments alone (its `codex`
+CLI is often a shim that no-ops outside its own terminal). Every file is backed
+up first and replaced atomically.
 
 For Claude Code and Pi the skill is copied directly; for the others it's
 installed through the [`skills` CLI](https://skills.sh) (`npx skills add
@@ -204,10 +206,11 @@ npm test            # node's built-in runner (test/smoke.test.mjs)
 node --check bin/cli.mjs
 ```
 
-CI (`.github/workflows/ci.yml`) runs the tests on Node 20/22/24 for every push
+CI (`.github/workflows/ci.yml`) runs the tests on Node 22/24 for every push
 and PR. Releases are published automatically: creating a GitHub Release triggers
 `.github/workflows/publish.yml`, which runs `npm publish --provenance --access
-public` so the package ships with a signed [npm provenance](https://docs.npmjs.com/generating-provenance-statements)
+public` (prereleases go to the `next` dist-tag; the release tag, e.g. `v0.1.3`,
+must match `package.json`'s version) so the package ships with a signed [npm provenance](https://docs.npmjs.com/generating-provenance-statements)
 statement linking it to this repo and commit. It needs one repository secret,
 `NPM_TOKEN` (an npm automation token).
 

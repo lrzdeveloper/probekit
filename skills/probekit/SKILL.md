@@ -13,15 +13,22 @@ description: >-
   send", "check this before I install it", "analyze this .app/.apk/.ipa/.dmg/.exe".
   This is the orchestration layer: it decides the route, runs provenance and
   signature checks, scans for indicators, calls REA for decompilation, and runs
-  the network capture — it does not replace REA, it conducts it.
+  the network capture — it does not replace REA, it conducts it. Requires the
+  REA MCP server — install it with `npx @lrzdeveloper/probekit`.
 ---
 
 # App security audit
 
 > **Requires the REA MCP server.** This skill is the method; the REA MCP tools
 > (`mcp__rea__*`, wrapping Ghidra/JADX/apktool) are the muscle it drives — the
-> skill cannot do its job without them. If REA isn't registered in this agent,
-> set it up with `npx @lrzdeveloper/probekit` (it wires the REA MCP for you).
+> skill cannot do its job without them.
+>
+> **Check before anything else:** if no `mcp__rea__*` tools are available in
+> this agent, stop and tell the user to run `npx @lrzdeveloper/probekit` (it
+> wires the REA MCP into their agents), then restart the agent. Do not start a
+> half audit without REA. Only if the user explicitly asks to go ahead anyway,
+> do the checks that need no REA (provenance, signatures, strings, network
+> capture) and label the result as partial — never give a full verdict.
 
 You are determining one thing: **is this artifact safe to run, or does it do
 something the user would not want?** Everything else serves that question.

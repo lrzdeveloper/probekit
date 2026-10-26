@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // probekit installer.
 // Registers the REA MCP server (and, where supported, the probekit skill) into
-// whichever AI agents you have — detected dynamically, chosen by you. Zero deps.
+// whichever AI agents you have — detected dynamically, chosen by you.
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -10,6 +10,7 @@ import { execSync, spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import * as p from '@clack/prompts';
 import { parse as jsoncParse, modify as jsoncModify, applyEdits } from 'jsonc-parser';
+import { parse as tomlParse } from 'smol-toml';
 
 // Surgically set/remove a key in a JSON *or* JSONC file, preserving comments and
 // formatting. value === undefined removes it. Returns the new text, or null if
@@ -24,14 +25,22 @@ function jsoncEdit(text, keyPath, value) {
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 // Run an external command with NO stdin (so an interactive prompt gets EOF and
 // can't hang us) and a hard timeout, without blocking the event loop (clack
-// spinners keep animating). Returns true on exit code 0.
-const run = (cmd, args, ms = 90000) => new Promise(resolve => {
-  let child;
-  try { child = spawn(cmd, args, { stdio: 'ignore' }); }
-  catch { return resolve(false); }
-  const t = setTimeout(() => { try { child.kill('SIGKILL'); } catch {} resolve(false); }, ms);
-  child.on('error', () => { clearTimeout(t); resolve(false); });
-  child.on('exit', code => { clearTimeout(t); resolve(code === 0); });
+// spinners keep animating). The child gets its own process group so a timeout
+// kills the whole tree (npx → npm → node), and we resolve only once it's gone.
+// Resolves 'ok' | 'failed' | 'timeout'.
+const killTree = child => {
+  try {
+    if (process.platform === 'win32') spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore' });
+    else process.kill(-child.pid, 'SIGKILL');
+  } catch {}
+};
+const run = (cmd, args, { ms = 90000, stdio = 'ignore' } = {}) => new Promise(resolve => {
+  let child, timedOut = false;
+  try { child = spawn(cmd, args, { stdio, detached: process.platform !== 'win32' }); }
+  catch { return resolve('failed'); }
+  const t = setTimeout(() => { timedOut = true; killTree(child); }, ms);
+  child.on('error', () => { clearTimeout(t); resolve('failed'); });
+  child.on('exit', code => { clearTimeout(t); resolve(timedOut ? 'timeout' : code === 0 ? 'ok' : 'failed'); });
 });
 
 const HOME = os.homedir();
@@ -47,11 +56,27 @@ const c = { dim: s => `\x1b[2m${s}\x1b[0m`, g: s => `\x1b[32m${s}\x1b[0m`,
 const tilde = x => (x || '').replace(HOME, '~');
 
 // ---- small shell + fs helpers ----
-const sh = cmd => { try { return execSync(cmd, { stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim(); } catch { return ''; } };
+const sh = cmd => { try { return execSync(cmd, { stdio: ['ignore', 'pipe', 'ignore'], timeout: 15000 }).toString().trim(); } catch { return ''; } };
 const which = bin => sh(`command -v ${bin}`);
 const exists = p => { try { fs.accessSync(p); return true; } catch { return false; } };
 const readJson = p => { try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch { return {}; } };
-const writeJson = (p, o) => { fs.mkdirSync(path.dirname(p), { recursive: true }); fs.writeFileSync(p, JSON.stringify(o, null, 2) + '\n'); };
+const readText = p => { try { return fs.readFileSync(p, 'utf8'); } catch { return null; } };
+// Replace a file atomically: write + fsync a temp sibling, keep the original's
+// mode, refuse if the file changed since we read it (expected = the text we
+// read, null = it didn't exist, undefined = don't check), then rename over it.
+// A symlinked config is written through to its real target so the link survives.
+function writeAtomic(file, text, expected) {
+  let target = file, mode = null;
+  try { target = fs.realpathSync(file); mode = fs.statSync(target).mode & 0o7777; } catch {}
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  const tmp = `${target}.probekit-${process.pid}-${Date.now()}.tmp`;
+  try {
+    const fd = fs.openSync(tmp, 'wx', mode ?? 0o666);
+    try { if (mode !== null) fs.fchmodSync(fd, mode); fs.writeSync(fd, text); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+    if (expected !== undefined && readText(target) !== expected) throw new Error(`${tilde(file)} changed while probekit was editing it`);
+    fs.renameSync(tmp, target);
+  } catch (e) { fs.rmSync(tmp, { force: true }); throw e; }
+}
 const backup = p => { if (!exists(p)) return null; const b = `${p}.bak.${Date.now()}`; fs.copyFileSync(p, b); return b; };
 const globFirst = (dir, re) => { try { return fs.readdirSync(dir).filter(f => re.test(f)).sort().reverse().map(f => path.join(dir, f))[0] || ''; } catch { return ''; } };
 
@@ -154,90 +179,171 @@ function buildEnv(memOverride) {
 // ---- per-agent actions ----
 // Each agent's config uses a different shape; mcpKeyFor + installMcp/removeMcp
 // write the one that agent actually understands (verified against each vendor's
-// docs). Codex is TOML, so we let its own CLI edit the file.
+// docs). Codex is TOML (edited by the helpers below).
 const mcpKeyFor = fmt => fmt === 'amp' ? 'amp.mcpServers' : fmt === 'zed' ? 'context_servers' : fmt === 'opencode' ? 'mcp' : 'mcpServers';
+
+// ---- Codex config.toml: TOML-aware edits that keep the user's comments ----
+// Real table headers only: we track strings (incl. multi-line """ / ''') and
+// open [ ] / { } in values, so header-looking text inside a value never counts.
+// Returns [{ line, path }]; path is the unquoted dotted key ([] if unparseable).
+function tomlHeaderPath(line) {
+  let s = line.trim();
+  const arr = s.startsWith('[[');
+  s = s.slice(arr ? 2 : 1);
+  const keys = [];
+  for (;;) {
+    s = s.trimStart();
+    let m;
+    if ((m = /^[A-Za-z0-9_-]+/.exec(s))) keys.push(m[0]);
+    else if ((m = /^"(?:[^"\\]|\\.)*"/.exec(s))) { try { keys.push(JSON.parse(m[0])); } catch { return []; } }
+    else if ((m = /^'[^']*'/.exec(s))) keys.push(m[0].slice(1, -1));
+    else return [];
+    s = s.slice(m[0].length).trimStart();
+    if (s[0] === '.') { s = s.slice(1); continue; }
+    return s.startsWith(arr ? ']]' : ']') ? keys : [];
+  }
+}
+function tomlHeaders(lines) {
+  const out = [];
+  let ml = null, depth = 0; // ml = open multi-line string delimiter
+  lines.forEach((line, n) => {
+    if (!ml && depth <= 0 && line.trimStart()[0] === '[') { out.push({ line: n, path: tomlHeaderPath(line) }); return; }
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (ml) {
+        if (ml === '"""' && ch === '\\') i++;
+        else if (line.startsWith(ml, i)) { while (line[i + 3] === ml[0]) i++; i += 2; ml = null; }
+      } else if (ch === '#') break;
+      else if (line.startsWith('"""', i) || line.startsWith("'''", i)) { ml = line.slice(i, i + 3); i += 2; }
+      else if (ch === '"') { for (i++; i < line.length && line[i] !== '"'; i++) if (line[i] === '\\') i++; }
+      else if (ch === "'") { i = line.indexOf("'", i + 1); if (i < 0) break; }
+      else if (ch === '[' || ch === '{') depth++;
+      else if (ch === ']' || ch === '}') depth--;
+    }
+  });
+  return out;
+}
+// Drop every [mcp_servers.rea] / [mcp_servers.rea.*] table (header up to the
+// next header). Returns the kept lines and where the first REA table was (-1).
+function tomlStripRea(text) {
+  const lines = text.split('\n'), hs = tomlHeaders(lines), drop = new Set();
+  let at = -1;
+  hs.forEach((h, k) => {
+    if (h.path[0] !== 'mcp_servers' || h.path[1] !== 'rea') return;
+    if (at < 0) at = h.line;
+    for (let n = h.line, end = hs[k + 1]?.line ?? lines.length; n < end; n++) drop.add(n);
+  });
+  return { lines: lines.filter((_, n) => !drop.has(n)), at };
+}
+const tomlRea = text => { try { return tomlParse(text).mcp_servers?.rea; } catch { return undefined; } };
+const tomlValid = text => { try { tomlParse(text); return true; } catch { return false; } };
+
+// Read a config for editing: null if absent; throws if present but unreadable
+// (so we never mistake it for empty and overwrite it).
+const readConfig = f => exists(f) ? fs.readFileSync(f, 'utf8') : null;
+
 async function installMcp(agent, mem) {
   const env = buildEnv(mem);
   const args = ['-y', REA_VERSION, 'mcp'];
   const fmt = agent.format || 'mcpServers';
-  if (fmt === 'codex') {
-    // The `codex` CLI is often a shim (e.g. cmux) that no-ops outside its own
-    // terminal, so we edit config.toml directly. Idempotent: skip if present.
-    if (reaInstalled(agent)) return { ok: true, note: 'already configured' };
+  try {
+    const orig = readConfig(agent.mcpFile), text = orig ?? '';
+    let next;
+    if (fmt === 'codex') {
+      // The `codex` CLI is often a shim (e.g. cmux) that no-ops outside its own
+      // terminal, so we edit config.toml directly: drop any existing REA table
+      // and write the current one in its place (or at the end).
+      if (!tomlValid(text)) return { ok: false, hint: `add it by hand to ${tilde(agent.mcpFile)} — the file has TOML syntax errors` };
+      const q = s => JSON.stringify(String(s)); // TOML basic string (JSON-compatible escaping)
+      const block = ['[mcp_servers.rea]', 'command = "npx"', `args = [ ${args.map(q).join(', ')} ]`, 'startup_timeout_sec = 60', ''];
+      const envEntries = Object.entries(env);
+      if (envEntries.length) block.push('[mcp_servers.rea.env]', ...envEntries.map(([k, v]) => `${k} = ${q(v)}`), '');
+      const { lines, at } = tomlStripRea(text);
+      if (at >= 0) lines.splice(at, 0, ...block);
+      else {
+        while (lines.length && !lines.at(-1).trim()) lines.pop();
+        lines.push(...(lines.length ? [''] : []), ...block);
+      }
+      next = lines.join('\n');
+      if (tomlRea(next)?.command !== 'npx')
+        return { ok: false, hint: `add it by hand to ${tilde(agent.mcpFile)} — REA is defined there in a form probekit can't safely rewrite` };
+    } else {
+      // JSON / JSONC: edit surgically (jsonc-parser) so comments AND formatting
+      // survive — works on Zed/Amp/VS Code even with comments, and only touches the
+      // `rea` key in big files like ~/.claude.json.
+      const value = fmt === 'opencode' ? { type: 'local', command: ['npx', ...args], environment: env, enabled: true }
+        : fmt === 'zed' ? { source: 'custom', command: 'npx', args, env }
+        : { ...(agent.mcpType ? { type: agent.mcpType } : {}), command: 'npx', args, env }; // mcpServers + amp
+      next = jsoncEdit(text, [mcpKeyFor(fmt), 'rea'], value);
+      if (next === null) return { ok: false, hint: `add it by hand to ${tilde(agent.mcpFile)} — the file has JSON syntax errors` };
+    }
+    if (next === orig) return { ok: true, note: 'already configured' };
     const b = backup(agent.mcpFile);
-    const q = s => JSON.stringify(String(s)); // TOML basic string (JSON-compatible escaping)
-    let block = `\n[mcp_servers.rea]\ncommand = "npx"\nargs = [ ${args.map(q).join(', ')} ]\nstartup_timeout_sec = 60\n`;
-    const envEntries = Object.entries(env);
-    if (envEntries.length) block += `\n[mcp_servers.rea.env]\n${envEntries.map(([k, v]) => `${k} = ${q(v)}`).join('\n')}\n`;
-    fs.mkdirSync(path.dirname(agent.mcpFile), { recursive: true });
-    const existing = exists(agent.mcpFile) ? fs.readFileSync(agent.mcpFile, 'utf8') : '';
-    fs.writeFileSync(agent.mcpFile, existing + (existing && !existing.endsWith('\n') ? '\n' : '') + block);
+    writeAtomic(agent.mcpFile, next, orig);
     return { ok: true, backup: b };
+  } catch (e) {
+    return { ok: false, hint: `re-run probekit or add it by hand to ${tilde(agent.mcpFile)} — ${e.message}` };
   }
-  // JSON / JSONC: edit surgically (jsonc-parser) so comments AND formatting
-  // survive — works on Zed/Amp/VS Code even with comments, and only touches the
-  // `rea` key in big files like ~/.claude.json.
-  const key = mcpKeyFor(fmt);
-  const value = fmt === 'opencode' ? { type: 'local', command: ['npx', ...args], environment: env, enabled: true }
-    : fmt === 'zed' ? { source: 'custom', command: 'npx', args, env }
-    : { ...(agent.mcpType ? { type: agent.mcpType } : {}), command: 'npx', args, env }; // mcpServers + amp
-  const text = exists(agent.mcpFile) ? fs.readFileSync(agent.mcpFile, 'utf8') : '';
-  const next = jsoncEdit(text, [key, 'rea'], value);
-  if (next === null) return { ok: false, hint: `add it by hand to ${tilde(agent.mcpFile)} — the file has JSON syntax errors` };
-  const b = backup(agent.mcpFile);
-  fs.mkdirSync(path.dirname(agent.mcpFile), { recursive: true });
-  fs.writeFileSync(agent.mcpFile, next);
-  return { ok: true, backup: b };
 }
+// Throws (with a message for the user) if REA is there but can't be removed safely.
 function removeMcp(agent) {
   const fmt = agent.format || 'mcpServers';
+  const orig = readConfig(agent.mcpFile);
+  if (orig === null) return false;
+  let next;
   if (fmt === 'codex') {
-    if (!exists(agent.mcpFile)) return false;
-    const raw = fs.readFileSync(agent.mcpFile, 'utf8');
-    if (!raw.includes('[mcp_servers.rea]')) return false;
-    backup(agent.mcpFile);
-    const out = []; let skip = false;
-    for (const line of raw.split('\n')) {
-      const t = line.trim();
-      if (t === '[mcp_servers.rea]' || t.startsWith('[mcp_servers.rea.')) { skip = true; continue; }
-      if (skip && t.startsWith('[') && !t.startsWith('[mcp_servers.rea')) skip = false;
-      if (!skip) out.push(line);
-    }
-    fs.writeFileSync(agent.mcpFile, out.join('\n'));
-    return true;
+    if (!tomlRea(orig)) return false;
+    next = tomlStripRea(orig).lines.join('\n');
+    if (!tomlValid(next) || tomlRea(next)) throw new Error(`remove mcp_servers.rea from ${tilde(agent.mcpFile)} by hand`);
+  } else {
+    const key = mcpKeyFor(fmt);
+    const obj = jsoncParse(orig) || {};
+    if (!(obj[key] && obj[key].rea)) return false;
+    next = jsoncEdit(orig, [key, 'rea'], undefined);
+    if (next === null) return false;
   }
-  if (!exists(agent.mcpFile)) return false;
-  const text = fs.readFileSync(agent.mcpFile, 'utf8'), key = mcpKeyFor(fmt);
-  const obj = jsoncParse(text) || {};
-  if (!(obj[key] && obj[key].rea)) return false;
-  const next = jsoncEdit(text, [key, 'rea'], undefined);
-  if (next === null) return false;
   backup(agent.mcpFile);
-  fs.writeFileSync(agent.mcpFile, next);
+  writeAtomic(agent.mcpFile, next, orig);
   return true;
 }
+// Stage the new copy beside the live one, verify it, then swap — the old copy
+// is only deleted once the new one is in place (and is restored on failure).
 function installSkillInto(agent) {
   if (!agent.skillDir) return null;
-  fs.rmSync(agent.skillDir, { recursive: true, force: true });
-  fs.cpSync(SKILL_SRC, agent.skillDir, { recursive: true });
-  return agent.skillDir;
+  const dst = agent.skillDir, stage = `${dst}.probekit-new`, old = `${dst}.probekit-old`;
+  fs.rmSync(stage, { recursive: true, force: true });
+  fs.rmSync(old, { recursive: true, force: true });
+  try {
+    fs.cpSync(SKILL_SRC, stage, { recursive: true });
+    if (!exists(path.join(stage, 'SKILL.md'))) throw new Error(`incomplete skill copy (no SKILL.md) from ${SKILL_SRC}`);
+    if (exists(dst)) fs.renameSync(dst, old);
+    try { fs.renameSync(stage, dst); }
+    catch (e) { if (exists(old)) fs.renameSync(old, dst); throw e; }
+  } finally {
+    fs.rmSync(stage, { recursive: true, force: true });
+  }
+  fs.rmSync(old, { recursive: true, force: true });
+  return dst;
 }
 // Deliver the skill: natively (SKILL.md copy) for Claude Code/Pi, or via the
 // vercel-labs `skills` CLI for the rest. Returns {how} or null (MCP-only agent).
 async function installSkillFor(agent) {
-  if (agent.skillDir) { installSkillInto(agent); return { how: 'native', where: agent.skillDir }; }
+  if (agent.skillDir) {
+    try { installSkillInto(agent); return { how: 'native', where: agent.skillDir }; }
+    catch (e) { return { how: 'native-failed', error: e.message }; }
+  }
   if (agent.skillsAgent) {
-    const ok = await run('npx', ['-y', 'skills@latest', 'add', SKILLS_REPO, '--skill', 'probekit', '-a', agent.skillsAgent, '-g', '-y']);
-    return { how: ok ? 'skills-cli' : 'skills-cli-failed' };
+    const res = await run('npx', ['-y', 'skills@latest', 'add', SKILLS_REPO, '--skill', 'probekit', '-a', agent.skillsAgent, '-g', '-y']);
+    return { how: res === 'ok' ? 'skills-cli' : 'skills-cli-failed' };
   }
   return null; // no skill mechanism
 }
 function reaInstalled(agent) {
   const fmt = agent.format || 'mcpServers';
-  if (fmt === 'codex') { try { return fs.readFileSync(agent.mcpFile, 'utf8').includes('[mcp_servers.rea]'); } catch { return false; } }
-  if (!exists(agent.mcpFile)) return false;
-  const obj = jsoncParse(fs.readFileSync(agent.mcpFile, 'utf8')) || {};
-  return !!(obj[mcpKeyFor(fmt)] || {}).rea;
+  const text = readText(agent.mcpFile);
+  if (text === null) return false;
+  if (fmt === 'codex') return !!tomlRea(text);
+  return !!(jsoncParse(text) || {})[mcpKeyFor(fmt)]?.rea;
 }
 const skillDirOf = agent => (agent.skillDir && exists(path.join(agent.skillDir, 'SKILL.md'))) ? agent.skillDir
   : (agent.skillGlobalDir && exists(path.join(agent.skillGlobalDir, 'SKILL.md'))) ? agent.skillGlobalDir : null;
@@ -278,9 +384,15 @@ async function install(opts = {}) {
   for (const a of agents) {
     const m = await installMcp(a, mem);
     if (m.ok) console.log(`  ${c.g('✓')} REA MCP → ${tilde(a.mcpFile)} ${m.note ? c.dim(`(${m.note})`) : m.backup ? c.dim(`(backup ${path.basename(m.backup)})`) : ''}`);
-    else console.log(c.y(`  ! REA MCP not set for ${a.label} — run: ${m.hint}`));
+    else {
+      // The skill is useless without REA's tools — don't install it half-way.
+      console.log(c.y(`  ! REA MCP not set for ${a.label} — run: ${m.hint}`));
+      console.log(c.y(`  ! skill skipped for ${a.label} until the REA MCP is configured — re-run \`probekit install\` after fixing it`));
+      continue;
+    }
     const sk = await installSkillFor(a);
     if (sk?.how === 'native') console.log(`  ${c.g('✓')} skill  → ${tilde(sk.where)}`);
+    else if (sk?.how === 'native-failed') console.log(c.y(`  ! skill not installed (${sk.error}) — re-run \`probekit install\``));
     else if (sk?.how === 'skills-cli') console.log(`  ${c.g('✓')} skill  → via skills CLI (${a.skillsAgent})`);
     else if (sk?.how === 'skills-cli-failed') console.log(c.y(`  ! skill not installed — run: npx skills add ${SKILLS_REPO} -a ${a.skillsAgent}`));
   }
@@ -348,19 +460,25 @@ async function init() {
     const go = await p.confirm({ message: 'Proceed?', initialValue: true });
     if (p.isCancel(go) || !go) return bail();
 
-    if (runEngines) setupEngines();
+    if (runEngines) await setupEngines();
     if (upgradeNode) {
       const s = p.spinner(); s.start('brew upgrade node (system-wide)');
-      const ok = await run('brew', ['upgrade', 'node']);
-      s.stop(ok ? 'Node upgraded' : 'brew upgrade node failed — upgrade Node manually');
+      const res = await run('brew', ['upgrade', 'node'], { ms: BREW_MS });
+      s.stop(res === 'ok' ? 'Node upgraded' : `brew upgrade node ${res === 'timeout' ? 'timed out' : 'failed'} — upgrade Node manually`);
     }
     const done = [], manual = [];
     for (const a of agents) {
       const was = reaInstalled(a);
       const s = p.spinner(); s.start(`${was ? 'Updating' : 'Configuring'} ${a.label}`);
-      const [m, sk] = await Promise.all([installMcp(a, mem), installSkillFor(a), sleep(400)]);
+      // The skill needs REA's tools, so it only goes in once the MCP is configured.
+      const minSpin = sleep(400);
+      const m = await installMcp(a, mem);
+      const sk = m.ok ? await installSkillFor(a) : null;
+      await minSpin;
       const mcpTag = m.ok ? (m.note ? `REA MCP (${m.note})` : 'REA MCP') : 'REA MCP — manual step needed';
-      const skTag = sk?.how === 'native' ? ' + skill'
+      const skTag = !m.ok ? ' (skill skipped until the MCP is configured)'
+        : sk?.how === 'native' ? ' + skill'
+        : sk?.how === 'native-failed' ? ` (skill failed: ${sk.error})`
         : sk?.how === 'skills-cli' ? ' + skill (via skills CLI)'
         : sk?.how === 'skills-cli-failed' ? ' (skill failed — run `npx skills add` manually)'
         : '';
@@ -389,14 +507,17 @@ async function init() {
   }
 }
 
-function setupEngines() {
+const BREW_MS = 15 * 60 * 1000; // generous: big bottles (openjdk) on slow links
+async function setupEngines() {
   const brew = which('brew');
   console.log(c.b('\nsetup-engines\n'));
   if (brew) {
     for (const [f, probe] of [['openjdk', 'java'], ['apktool', 'apktool'], ['mitmproxy', 'mitmdump']]) {
       if (which(probe)) { console.log(`  ${c.g('✓')} ${f} already present`); continue; }
       console.log(c.dim(`  brew install ${f} ...`));
-      try { execSync(`brew install ${f}`, { stdio: 'inherit' }); } catch { console.log(c.y(`  ! brew install ${f} failed — install it manually`)); }
+      const res = await run('brew', ['install', f], { ms: BREW_MS, stdio: ['ignore', 'inherit', 'inherit'] });
+      if (res === 'timeout') console.log(c.y(`  ! brew install ${f} timed out after ${BREW_MS / 60000} min and was stopped — run \`brew install ${f}\` yourself (if brew reports a lock, wait for or end the other brew process first)`));
+      else if (res !== 'ok') console.log(c.y(`  ! brew install ${f} failed — install it manually`));
     }
   } else {
     console.log(c.y('  Homebrew not found. Install openjdk, apktool and mitmproxy with your package manager.'));
@@ -422,7 +543,8 @@ function uninstall() {
   const touched = [];
   for (const a of AGENTS) {
     let hit = false;
-    if (removeMcp(a)) { console.log(`  ${c.g('✓')} removed REA MCP from ${a.label}`); hit = true; }
+    try { if (removeMcp(a)) { console.log(`  ${c.g('✓')} removed REA MCP from ${a.label}`); hit = true; } }
+    catch (e) { console.log(c.y(`  ! REA MCP not removed from ${a.label} — ${e.message}`)); }
     const skdir = skillDirOf(a); // native or skills-CLI global dir — removed directly (no npx, no hang)
     if (skdir) { fs.rmSync(skdir, { recursive: true, force: true }); console.log(`  ${c.g('✓')} removed skill from ${tilde(skdir)}`); hit = true; }
     if (hit) touched.push(a.label);
@@ -453,18 +575,24 @@ const VERSION = (() => { try { return readJson(path.join(PKG_ROOT, 'package.json
 
 // ---- update check: daily-cached, fail-silent, off in CI; offers to apply ----
 const semverGt = (a, b) => { const x = a.split('.').map(Number), y = b.split('.').map(Number); for (let i = 0; i < 3; i++) { if ((x[i] || 0) > (y[i] || 0)) return true; if ((x[i] || 0) < (y[i] || 0)) return false; } return false; };
+const isSemver = v => typeof v === 'string' && /^\d+\.\d+\.\d+(?:[-+][\w.+-]*)?$/.test(v);
 async function latestVersion() {
-  const cacheFile = path.join(os.tmpdir(), 'probekit-update-check.json');
-  try { const cc = readJson(cacheFile); if (cc.at && Date.now() - cc.at < 864e5 && cc.v) return cc.v; } catch {}
+  // User-owned private cache (not shared /tmp, where another user could plant
+  // a symlink or a fake cache); written atomically by rename, never followed.
+  const cacheDir = path.join(process.env.XDG_CACHE_HOME || path.join(HOME, '.cache'), 'probekit');
+  const cacheFile = path.join(cacheDir, 'update-check.json');
+  const cc = readJson(cacheFile);
+  if (cc.at && Date.now() - cc.at < 864e5 && isSemver(cc.v)) return cc.v;
+  const ac = new AbortController(); const t = setTimeout(() => ac.abort(), 1500);
   try {
-    const ac = new AbortController(); const t = setTimeout(() => ac.abort(), 1500);
     const r = await fetch('https://registry.npmjs.org/@lrzdeveloper%2Fprobekit/latest', { signal: ac.signal });
-    clearTimeout(t);
     if (!r.ok) return null;
-    const v = (await r.json()).version;
-    try { writeJson(cacheFile, { at: Date.now(), v }); } catch {}
+    const v = (await r.json()).version; // still under the deadline: a stalled body aborts too
+    if (!isSemver(v)) return null;
+    try { fs.mkdirSync(cacheDir, { recursive: true, mode: 0o700 }); writeAtomic(cacheFile, JSON.stringify({ at: Date.now(), v }) + '\n'); } catch {}
     return v;
   } catch { return null; }
+  finally { clearTimeout(t); }
 }
 async function notifyUpdate() {
   if (!process.stdout.isTTY || process.env.CI || process.env.PROBEKIT_NO_UPDATE_CHECK) return;
