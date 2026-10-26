@@ -134,7 +134,9 @@ async function installMcp(agent, mem) {
   const args = ['-y', REA_VERSION, 'mcp'];
   const fmt = agent.format || 'mcpServers';
   if (fmt === 'codex') {
+    if (!which('codex')) return { ok: false, hint: `codex CLI not on PATH — add by hand: codex mcp add rea -- npx ${args.join(' ')}` };
     const envArgs = Object.entries(env).flatMap(([k, v]) => ['--env', `${k}=${v}`]);
+    await run('codex', ['mcp', 'remove', 'rea']); // best-effort → makes the add idempotent (no duplicate error)
     if (await run('codex', ['mcp', 'add', 'rea', ...envArgs, '--', 'npx', ...args])) return { ok: true };
     return { ok: false, hint: `codex mcp add rea -- npx ${args.join(' ')}` };
   }
@@ -259,7 +261,7 @@ async function init() {
     const sel = await p.autocompleteMultiselect({
       message: 'Which agents get probekit? (REA MCP + skill — type to search, space to toggle)',
       placeholder: 'Search agents…',
-      options: AGENTS.map(a => ({ value: a.id, label: a.label, hint: a.detect() ? 'detected' : undefined })),
+      options: AGENTS.map(a => ({ value: a.id, label: a.label, hint: reaInstalled(a) ? 'configured ✓' : a.detect() ? 'detected' : undefined })),
       initialValues: detected().map(a => a.id),
       required: true,
     });
@@ -302,7 +304,8 @@ async function init() {
       s.stop(ok ? 'Node upgraded' : 'brew upgrade node failed — upgrade Node manually');
     }
     for (const a of agents) {
-      const s = p.spinner(); s.start(`Configuring ${a.label}`);
+      const was = reaInstalled(a);
+      const s = p.spinner(); s.start(`${was ? 'Updating' : 'Configuring'} ${a.label}`);
       const [m, sk] = await Promise.all([installMcp(a, mem), installSkillFor(a), sleep(400)]);
       const mcpTag = m.ok ? 'REA MCP' : 'REA MCP (manual step)';
       const skTag = sk?.how === 'native' ? ' + skill'
