@@ -6,16 +6,22 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import * as readline from 'node:readline/promises';
-import { execSync, execFile } from 'node:child_process';
+import { execSync, spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { promisify } from 'node:util';
 import * as p from '@clack/prompts';
 
-const execFileP = promisify(execFile);
 const sleep = ms => new Promise(r => setTimeout(r, ms));
-// Run an external command without blocking the event loop, so clack spinners
-// keep animating while it works. Returns true on success.
-const run = async (cmd, args) => { try { await execFileP(cmd, args, { maxBuffer: 16 * 1024 * 1024 }); return true; } catch { return false; } };
+// Run an external command with NO stdin (so an interactive prompt gets EOF and
+// can't hang us) and a hard timeout, without blocking the event loop (clack
+// spinners keep animating). Returns true on exit code 0.
+const run = (cmd, args, ms = 90000) => new Promise(resolve => {
+  let child;
+  try { child = spawn(cmd, args, { stdio: 'ignore' }); }
+  catch { return resolve(false); }
+  const t = setTimeout(() => { try { child.kill('SIGKILL'); } catch {} resolve(false); }, ms);
+  child.on('error', () => { clearTimeout(t); resolve(false); });
+  child.on('exit', code => { clearTimeout(t); resolve(code === 0); });
+});
 
 const HOME = os.homedir();
 const PKG_ROOT = path.resolve(fileURLToPath(import.meta.url), '..', '..');
@@ -82,6 +88,16 @@ const AGENTS = [
     mcpFile: path.join(HOME, '.config', 'amp', 'settings.json'), skillsAgent: 'amp' },
 ];
 const SKILLS_REPO = 'lrzdeveloper/probekit'; // for `npx skills add <repo>`
+
+// Where `npx skills add -g` drops the skill per agent (from the skills docs) —
+// used to verify/remove it directly without the CLI.
+const SKILL_GLOBAL = {
+  cursor: ['.cursor', 'skills'], windsurf: ['.codeium', 'windsurf', 'skills'],
+  'gemini-cli': ['.gemini', 'skills'], 'github-copilot': ['.copilot', 'skills'],
+  antigravity: ['.gemini', 'antigravity', 'skills'], codex: ['.agents', 'skills'],
+  zed: ['.agents', 'skills'], opencode: ['.config', 'opencode', 'skills'], amp: ['.config', 'agents', 'skills'],
+};
+for (const a of AGENTS) if (a.skillsAgent && SKILL_GLOBAL[a.skillsAgent]) a.skillGlobalDir = path.join(HOME, ...SKILL_GLOBAL[a.skillsAgent], 'probekit');
 const byId = id => AGENTS.find(a => a.id === id);
 const detected = () => AGENTS.filter(a => a.detect());
 
@@ -210,7 +226,9 @@ function reaInstalled(agent) {
   if (!exists(agent.mcpFile)) return false;
   return !!(readJson(agent.mcpFile)[mcpKeyFor(fmt)] || {}).rea;
 }
-const skillInstalled = agent => !!agent.skillDir && exists(path.join(agent.skillDir, 'SKILL.md'));
+const skillDirOf = agent => (agent.skillDir && exists(path.join(agent.skillDir, 'SKILL.md'))) ? agent.skillDir
+  : (agent.skillGlobalDir && exists(path.join(agent.skillGlobalDir, 'SKILL.md'))) ? agent.skillGlobalDir : null;
+const skillInstalled = agent => !!skillDirOf(agent);
 // Agents only load/unload probekit on restart — always tell the user to reload.
 const reloadNote = (labels, appearing) => c.dim(`\n  Restart / reconnect ${labels.length ? labels.join(', ') : 'your agent(s)'} ${appearing ? 'so probekit (its skill + REA tools) shows up.' : 'so probekit is fully unloaded.'}\n`);
 
@@ -231,8 +249,7 @@ function doctor() {
   for (const a of AGENTS) {
     const det = a.detect();
     const bits = [reaInstalled(a) ? c.g('REA ✓') : det ? c.r('REA ✗') : c.dim('REA –')];
-    if (a.skillDir) bits.push(skillInstalled(a) ? c.g('skill ✓') : det ? c.r('skill ✗') : c.dim('skill –'));
-    else if (a.skillsAgent) bits.push(c.dim('skill via skills CLI'));
+    if (a.skillDir || a.skillGlobalDir) bits.push(skillInstalled(a) ? c.g('skill ✓') : det ? c.r('skill ✗') : c.dim('skill –'));
     else bits.push(c.dim('(MCP only)'));
     console.log(`  ${det ? c.g('●') : c.dim('○')} ${a.label.padEnd(15)} ${bits.join('   ')}${det ? '' : c.dim('  not detected')}`);
   }
@@ -387,18 +404,14 @@ function ghidraHelp() {
     4. Re-run \`probekit install\` to wire the path into the MCP env.`));
 }
 
-async function uninstall() {
+function uninstall() {
   console.log(c.b('\nuninstall (config only — engines are left in place)\n'));
   const touched = [];
   for (const a of AGENTS) {
     let hit = false;
     if (removeMcp(a)) { console.log(`  ${c.g('✓')} removed REA MCP from ${a.label}`); hit = true; }
-    if (skillInstalled(a)) { fs.rmSync(a.skillDir, { recursive: true, force: true }); console.log(`  ${c.g('✓')} removed skill from ${tilde(a.skillDir)}`); hit = true; }
-    else if (a.skillsAgent && a.detect()) {
-      process.stdout.write(c.dim(`  … removing skill from ${a.label} (skills CLI)\r`));
-      if (await run('npx', ['-y', 'skills@latest', 'remove', 'probekit', '--agent', a.skillsAgent, '--global'])) { console.log(`  ${c.g('✓')} removed skill from ${a.label} (skills CLI)        `); hit = true; }
-      else console.log(c.dim(`  · ${a.label}: no probekit skill to remove (or skills CLI unavailable)`));
-    }
+    const skdir = skillDirOf(a); // native or skills-CLI global dir — removed directly (no npx, no hang)
+    if (skdir) { fs.rmSync(skdir, { recursive: true, force: true }); console.log(`  ${c.g('✓')} removed skill from ${tilde(skdir)}`); hit = true; }
     if (hit) touched.push(a.label);
   }
   if (!touched.length) { console.log(c.dim('  Nothing to remove — probekit was not wired into any agent.\n')); return; }
