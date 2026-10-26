@@ -1,7 +1,7 @@
 {
   "name": "@lrzdeveloper/probekit",
   "version": "0.1.2",
-  "description": "Guided, dynamic installer for an app-security / reverse-engineering stack: the probekit skill plus the REA MCP server (Ghidra/JADX/apktool) wired into whichever AI agents you have — Claude Code, Pi, Cursor, Windsurf, Claude Desktop — detected automatically and chosen by you.",
+  "description": "Installs the probekit app security skill and the REA MCP server (Ghidra, JADX, apktool) into your AI agents, such as Claude Code, Codex, Cursor and Gemini CLI. It detects the agents on your machine and lets you pick which ones to set up.",
   "type": "module",
   "bin": {
     "probekit": "bin/cli.mjs"

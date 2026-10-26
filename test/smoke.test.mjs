@@ -1,4 +1,4 @@
-// Smoke tests — exercise the CLI surface without touching real agent configs.
+// Smoke tests: exercise the CLI surface without touching real agent configs.
 // Run with: npm test   (node's built-in runner)
 import { test } from 'node:test';
 import assert from 'node:assert/strict';

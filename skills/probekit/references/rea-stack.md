@@ -1,7 +1,7 @@
 # The REA stack: inventory, discovery, config, recovery
 
-This skill conducts REA; it does not reinstall it. Discover what's present, use
-it, and only repair the specific thing that's broken.
+This skill directs REA; it does not reinstall it. Find out what's present, use
+it, and repair only the specific thing that's broken.
 
 ## Discover what's installed (do this first, don't assume)
 
@@ -16,15 +16,15 @@ command -v apktool jadx mitmdump tshark    # supporting tools
 ```
 
 If the REA MCP tools are not in your tool list at all, read the
-`reverse-engineer-anything` skill — it owns connection/registration. This skill
-assumes REA is reachable.
+`reverse-engineer-anything` skill, which handles connection/registration. This
+skill assumes REA is reachable.
 
 ## Known-good configuration (reference, not a hard requirement)
 
 REA selects a decompile provider via environment variables on its MCP server
 registration (for Claude Code: the `rea` entry in `~/.claude.json`; for Pi:
-`~/.pi/agent/mcp.json`; other clients have their own path — `rea doctor` prints
-it). A configuration that worked well on an Apple-silicon Mac:
+`~/.pi/agent/mcp.json`; other clients have their own path, which `rea doctor`
+prints). This configuration worked well on an Apple-silicon Mac:
 
 ```json
 "env": {
@@ -37,9 +37,9 @@ it). A configuration that worked well on an Apple-silicon Mac:
 }
 ```
 
-Two gotchas learned the hard way:
+Two problems that have come up in practice:
 
-- **Ghidra version must match what REA supports.** REA pins a Ghidra line (e.g.
+- **The Ghidra version must match what REA supports.** REA pins a Ghidra line (e.g.
   12.1.x). A newer Homebrew Ghidra (12.2) will be rejected with
   `unsupported_version`. Download the exact supported release from the official
   NSA GitHub releases, verify its SHA-256, and point `GHIDRA_INSTALL_DIR` at it.
@@ -52,29 +52,30 @@ Two gotchas learned the hard way:
   ```
 
 After changing REA's env, the user must reconnect the MCP server (e.g. `/mcp` in
-Claude Code) — a running server keeps its old config.
+Claude Code), because a running server keeps its old config.
 
-## Response size & timeouts
+## Response size and timeouts
 
 - REA results can exceed the MCP response budget. When a tool says the result was
-  saved to a file, use `jq`/`python` on that file to extract the slice you need;
-  don't try to re-request the whole thing.
-- First Ghidra analysis of a large binary (tens of MB) can take minutes and needs
-  heap. If you hit `provider_timeout` or it's swapping, raise `GHIDRA_MAXMEM` and
-  `REA_GHIDRA_STARTUP_TIMEOUT_MS` (above) rather than abandoning the analysis.
+  saved to a file, use `jq`/`python` on that file to extract the part you need
+  instead of requesting the whole thing again.
+- The first Ghidra analysis of a large binary (tens of MB) can take minutes and
+  needs heap. If you hit `provider_timeout` or the machine is swapping, raise
+  `GHIDRA_MAXMEM` and `REA_GHIDRA_STARTUP_TIMEOUT_MS` (above) instead of
+  abandoning the analysis.
   Confirm the heap is actually in effect: `ps -axo command | grep '[j]ava.*-Xmx'`.
 
 ## Finding function names on "stripped-looking" modern binaries
 
 Ghidra headless often won't surface Rust/Go string literals, and
-`search_procedures` on a huge binary can overflow the response. The reliable
-pattern:
+`search_procedures` on a huge binary can overflow the response. This pattern
+works reliably:
 
 ```bash
 # demangled symbols straight from the binary, filtered to the module of interest
 nm -C <binary> | grep -E '<module>.*<feature>' | grep -vE 'drop_in_place|::fmt|Deserialize'
 ```
 
-Take the address of the function you want and hand it to REA
-(`procedure_pseudo_code` / `analyze_function`). This shell+REA combination is
+Take the address of the function you want and pass it to REA
+(`procedure_pseudo_code` / `analyze_function`). Combining the shell with REA is
 what lets the audit reach real behavior instead of stopping at strings.

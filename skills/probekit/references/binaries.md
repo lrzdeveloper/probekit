@@ -10,7 +10,7 @@ shasum -a 256 <target>       # record identity; useful for VT/known-sample looku
 
 `MZ`→PE (Windows), `\x7fELF`→ELF (Linux/Android native/firmware payload),
 `\xca\xfe\xba\xbe`/`\xcf\xfa\xed\xfe`→Mach-O (use `apple.md`), `PK`→zip-family
-(APK/IPA/JAR/MSIX — route by contents).
+(APK/IPA/JAR/MSIX; route by contents).
 
 ## Windows PE / .NET
 
@@ -18,33 +18,33 @@ shasum -a 256 <target>       # record identity; useful for VT/known-sample looku
   (`VirtualAlloc`+`CreateRemoteThread` injection, `WinHttp`/`WinINet` hosts,
   `RegSetValue` Run-key persistence, `CreateService`, crypto APIs), and
   `inspect_pe_resources` for embedded payloads/icons.
-- Managed .NET assembly: REA `inspect_managed_artifact` / managed members — IL
-  decompiles cleanly to near-source C#. Watch for `Assembly.Load(byte[])`,
-  reflection, `Process.Start`, base64 blobs.
+- Managed .NET assembly: REA `inspect_managed_artifact` / managed members. IL
+  decompiles cleanly to C# that is close to the source. Watch for
+  `Assembly.Load(byte[])`, reflection, `Process.Start`, base64 blobs.
 - Authenticode: verify the signature and publisher (`signtool verify` on Windows;
-  `osslsigncode verify` cross-platform). Absent/invalid on a "real product" is a
-  flag.
+  `osslsigncode verify` on any platform). A missing or invalid signature on a
+  "real product" is a red flag.
 
 ## Firmware images
 
-- `inspect_firmware_regions` to map it; `extract_firmware` (caller-supplied
-  Binwalk/Unblob on Linux) into a **fresh output directory** to carve
-  filesystems/bootloaders.
-- Then triage the extracted root like a small system: hardcoded credentials,
-  `/etc` startup scripts, embedded keys/certs, telnet/backdoor services, and
-  native binaries (ELF → `open_binary`).
+- Map it with `inspect_firmware_regions`, then run `extract_firmware`
+  (caller-supplied Binwalk/Unblob on Linux) into a **fresh output directory** to
+  carve out filesystems/bootloaders.
+- Triage the extracted root like a small system: hardcoded credentials, `/etc`
+  startup scripts, embedded keys/certs, telnet/backdoor services, and native
+  binaries (ELF → `open_binary`).
 
-## Loose / unknown binary
+## Loose or unknown binary
 
-`open_binary` with auto provider. Combine with shell `strings`, `nm -C`, and the
-indicator scan from SKILL.md. If it's a script (shell/Python/PowerShell/JS),
-**read it, never run it** — deobfuscate base64/hex/`eval` layers by hand and
-report what each layer would do.
+Use `open_binary` with the auto provider, together with shell `strings`,
+`nm -C`, and the indicator scan from SKILL.md. If it's a script
+(shell/Python/PowerShell/JS), **read it, never run it**. Deobfuscate the
+base64/hex/`eval` layers by hand and report what each layer would do.
 
 ## A note on `curl … | bash` and install one-liners
 
 If the "app" is really an install command or script, that's the audit target.
-Decode every layer, resolve what it downloads and from where, and report the
-chain. Do not execute it to find out. A remote script piped straight to a shell
-is itself a risk worth stating to the user regardless of what this instance of it
-happens to contain.
+Decode every layer, work out what it downloads and from where, and report the
+chain. Do not execute it to find out. Piping a remote script straight into a
+shell is a risk in itself, and you should tell the user so whatever this
+particular script contains.

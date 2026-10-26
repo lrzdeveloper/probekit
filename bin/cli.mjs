@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // probekit installer.
 // Registers the REA MCP server (and, where supported, the probekit skill) into
-// whichever AI agents you have — detected dynamically, chosen by you.
+// whichever AI agents you have. It detects them and lets you choose.
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -83,8 +83,8 @@ const globFirst = (dir, re) => { try { return fs.readdirSync(dir).filter(f => re
 // ---- agent targets: detected dynamically, chosen by the user ----
 // Every selected agent ALWAYS gets the REA MCP (the skill is useless without it).
 // The skill is delivered either natively (skillDir, for agents that read
-// SKILL.md: Claude Code, Pi) or via the `skills` CLI (skillsAgent). Claude
-// Desktop is MCP-only — it has no skill mechanism.
+// SKILL.md: Claude Code, Pi) or via the `skills` CLI (skillsAgent). An agent
+// with neither would be MCP-only.
 const AGENTS = [
   { id: 'claude-code', label: 'Claude Code',
     detect: () => exists(path.join(HOME, '.claude.json')) || exists(path.join(HOME, '.claude')),
@@ -109,7 +109,7 @@ const AGENTS = [
   { id: 'antigravity', label: 'Antigravity',
     detect: () => exists(path.join(HOME, '.gemini', 'antigravity')),
     mcpFile: path.join(HOME, '.gemini', 'antigravity', 'mcp_config.json'), skillsAgent: 'antigravity' },
-  // Different MCP config shapes — one verified adapter each (see installMcp).
+  // Different MCP config shapes, one verified adapter each (see installMcp).
   { id: 'codex', label: 'Codex', format: 'codex',
     detect: () => exists(path.join(HOME, '.codex')),
     mcpFile: path.join(HOME, '.codex', 'config.toml'), skillsAgent: 'codex' },
@@ -125,8 +125,8 @@ const AGENTS = [
 ];
 const SKILLS_REPO = 'lrzdeveloper/probekit'; // for `npx skills add <repo>`
 
-// Where `npx skills add -g` drops the skill per agent (from the skills docs) —
-// used to verify/remove it directly without the CLI.
+// Where `npx skills add -g` drops the skill per agent (from the skills docs).
+// Used to verify/remove it directly without the CLI.
 const SKILL_GLOBAL = {
   cursor: ['.cursor', 'skills'], windsurf: ['.codeium', 'windsurf', 'skills'],
   'gemini-cli': ['.gemini', 'skills'], 'github-copilot': ['.copilot', 'skills'],
@@ -253,7 +253,7 @@ async function installMcp(agent, mem) {
       // The `codex` CLI is often a shim (e.g. cmux) that no-ops outside its own
       // terminal, so we edit config.toml directly: drop any existing REA table
       // and write the current one in its place (or at the end).
-      if (!tomlValid(text)) return { ok: false, hint: `add it by hand to ${tilde(agent.mcpFile)} — the file has TOML syntax errors` };
+      if (!tomlValid(text)) return { ok: false, hint: `the file has TOML syntax errors, so add it by hand to ${tilde(agent.mcpFile)}` };
       const q = s => JSON.stringify(String(s)); // TOML basic string (JSON-compatible escaping)
       const block = ['[mcp_servers.rea]', 'command = "npx"', `args = [ ${args.map(q).join(', ')} ]`, 'startup_timeout_sec = 60', ''];
       const envEntries = Object.entries(env);
@@ -266,23 +266,23 @@ async function installMcp(agent, mem) {
       }
       next = lines.join('\n');
       if (tomlRea(next)?.command !== 'npx')
-        return { ok: false, hint: `add it by hand to ${tilde(agent.mcpFile)} — REA is defined there in a form probekit can't safely rewrite` };
+        return { ok: false, hint: `REA is defined in ${tilde(agent.mcpFile)} in a form probekit can't safely rewrite, so edit it by hand` };
     } else {
-      // JSON / JSONC: edit surgically (jsonc-parser) so comments AND formatting
-      // survive — works on Zed/Amp/VS Code even with comments, and only touches the
-      // `rea` key in big files like ~/.claude.json.
+      // JSON / JSONC: edit in place with jsonc-parser so comments and formatting
+      // survive (Zed/Amp/VS Code files can have comments). Only the `rea` key
+      // changes, even in big files like ~/.claude.json.
       const value = fmt === 'opencode' ? { type: 'local', command: ['npx', ...args], environment: env, enabled: true }
         : fmt === 'zed' ? { source: 'custom', command: 'npx', args, env }
         : { ...(agent.mcpType ? { type: agent.mcpType } : {}), command: 'npx', args, env }; // mcpServers + amp
       next = jsoncEdit(text, [mcpKeyFor(fmt), 'rea'], value);
-      if (next === null) return { ok: false, hint: `add it by hand to ${tilde(agent.mcpFile)} — the file has JSON syntax errors` };
+      if (next === null) return { ok: false, hint: `the file has JSON syntax errors, so add it by hand to ${tilde(agent.mcpFile)}` };
     }
     if (next === orig) return { ok: true, note: 'already configured' };
     const b = backup(agent.mcpFile);
     writeAtomic(agent.mcpFile, next, orig);
     return { ok: true, backup: b };
   } catch (e) {
-    return { ok: false, hint: `re-run probekit or add it by hand to ${tilde(agent.mcpFile)} — ${e.message}` };
+    return { ok: false, hint: `${e.message}. Re-run probekit or add it by hand to ${tilde(agent.mcpFile)}` };
   }
 }
 // Throws (with a message for the user) if REA is there but can't be removed safely.
@@ -306,7 +306,7 @@ function removeMcp(agent) {
   writeAtomic(agent.mcpFile, next, orig);
   return true;
 }
-// Stage the new copy beside the live one, verify it, then swap — the old copy
+// Stage the new copy beside the live one, verify it, then swap. The old copy
 // is only deleted once the new one is in place (and is restored on failure).
 function installSkillInto(agent) {
   if (!agent.skillDir) return null;
@@ -348,13 +348,13 @@ function reaInstalled(agent) {
 const skillDirOf = agent => (agent.skillDir && exists(path.join(agent.skillDir, 'SKILL.md'))) ? agent.skillDir
   : (agent.skillGlobalDir && exists(path.join(agent.skillGlobalDir, 'SKILL.md'))) ? agent.skillGlobalDir : null;
 const skillInstalled = agent => !!skillDirOf(agent);
-// Agents only load/unload probekit on restart — always tell the user to reload.
+// Agents only load/unload probekit on restart, so always tell the user to reload.
 const reloadNote = (labels, appearing) => c.dim(`\n  Restart / reconnect ${labels.length ? labels.join(', ') : 'your agent(s)'} ${appearing ? 'so probekit (its skill + REA tools) shows up.' : 'so probekit is fully unloaded.'}\n`);
 
 function doctor() {
   const java = findJava(), gh = findGhidra(), jar = findJadxJar();
   const rows = [
-    [`node (REA needs ${REA_NODE_REQ})`, nodeSatisfiesRea(), nodeSatisfiesRea() ? process.versions.node : `${process.versions.node} — update Node so the REA MCP can run`],
+    [`node (REA needs ${REA_NODE_REQ})`, nodeSatisfiesRea(), nodeSatisfiesRea() ? process.versions.node : `${process.versions.node}: update Node so the REA MCP can run`],
     ['java (JDK 17+)', !!java, java || 'brew install openjdk'],
     ['Ghidra 12.1.x', !!gh, gh || 'probekit setup-engines   (12.2+ is rejected by REA)'],
     ['jadx MCP jar', !!jar, jar || `place jadx-headless-mcp-*-all.jar in ${tilde(REA_TOOLS)} (ships with REA engine setup)`],
@@ -367,8 +367,8 @@ function doctor() {
   console.log(c.b('\nMCP wiring\n'));
   for (const a of AGENTS) {
     const det = a.detect();
-    const bits = [reaInstalled(a) ? c.g('REA ✓') : det ? c.r('REA ✗') : c.dim('REA –')];
-    if (a.skillDir || a.skillGlobalDir) bits.push(skillInstalled(a) ? c.g('skill ✓') : det ? c.r('skill ✗') : c.dim('skill –'));
+    const bits = [reaInstalled(a) ? c.g('REA ✓') : det ? c.r('REA ✗') : c.dim('REA -')];
+    if (a.skillDir || a.skillGlobalDir) bits.push(skillInstalled(a) ? c.g('skill ✓') : det ? c.r('skill ✗') : c.dim('skill -'));
     else bits.push(c.dim('(MCP only)'));
     console.log(`  ${det ? c.g('●') : c.dim('○')} ${a.label.padEnd(15)} ${bits.join('   ')}${det ? '' : c.dim('  not detected')}`);
   }
@@ -379,26 +379,26 @@ function doctor() {
 async function install(opts = {}) {
   const agents = (opts.agents ? opts.agents.map(byId).filter(Boolean) : detected());
   const mem = opts.mem;
-  console.log(c.b('\nprobekit — install\n'));
-  if (!agents.length) { console.log(c.y('  No agents selected or detected — nothing to do.\n')); return; }
+  console.log(c.b('\nprobekit install\n'));
+  if (!agents.length) { console.log(c.y('  No agents selected or detected, so there is nothing to do.\n')); return; }
   for (const a of agents) {
     const m = await installMcp(a, mem);
     if (m.ok) console.log(`  ${c.g('✓')} REA MCP → ${tilde(a.mcpFile)} ${m.note ? c.dim(`(${m.note})`) : m.backup ? c.dim(`(backup ${path.basename(m.backup)})`) : ''}`);
     else {
-      // The skill is useless without REA's tools — don't install it half-way.
-      console.log(c.y(`  ! REA MCP not set for ${a.label} — run: ${m.hint}`));
-      console.log(c.y(`  ! skill skipped for ${a.label} until the REA MCP is configured — re-run \`probekit install\` after fixing it`));
+      // The skill is useless without REA's tools, so don't install it half-way.
+      console.log(c.y(`  ! REA MCP not set for ${a.label}: ${m.hint}`));
+      console.log(c.y(`  ! skill skipped for ${a.label} until the REA MCP is configured. Re-run \`probekit install\` once that's fixed.`));
       continue;
     }
     const sk = await installSkillFor(a);
     if (sk?.how === 'native') console.log(`  ${c.g('✓')} skill  → ${tilde(sk.where)}`);
-    else if (sk?.how === 'native-failed') console.log(c.y(`  ! skill not installed (${sk.error}) — re-run \`probekit install\``));
+    else if (sk?.how === 'native-failed') console.log(c.y(`  ! skill not installed (${sk.error}). Re-run \`probekit install\`.`));
     else if (sk?.how === 'skills-cli') console.log(`  ${c.g('✓')} skill  → via skills CLI (${a.skillsAgent})`);
-    else if (sk?.how === 'skills-cli-failed') console.log(c.y(`  ! skill not installed — run: npx skills add ${SKILLS_REPO} -a ${a.skillsAgent}`));
+    else if (sk?.how === 'skills-cli-failed') console.log(c.y(`  ! skill not installed. Run: npx skills add ${SKILLS_REPO} -a ${a.skillsAgent}`));
   }
   if (!nodeSatisfiesRea()) console.log(c.y(`\n  ⚠ Node ${process.versions.node} is too old for REA (${REA_NODE_REQ}).\n    Update Node, then reconnect the MCP. Until then REA will report unhealthy.`));
   const env = buildEnv(mem);
-  if (!env.GHIDRA_INSTALL_DIR || !env.REA_JADX_MCP_JAR) console.log(c.y('\n  Some engines are missing — run `probekit setup-engines`.'));
+  if (!env.GHIDRA_INSTALL_DIR || !env.REA_JADX_MCP_JAR) console.log(c.y('\n  Some engines are missing. Run `probekit setup-engines`.'));
   console.log(reloadNote(agents.map(a => a.label), true));
   doctor();
 }
@@ -408,10 +408,10 @@ async function install(opts = {}) {
 // selected agent ALWAYS gets the REA MCP (+ the skill). Falls back to a plain
 // install when not a TTY (piped, CI).
 async function init() {
-  if (!process.stdin.isTTY) { console.log(c.dim('(non-interactive — running install for detected agents)')); return install({}); }
-  const bail = (m = 'Aborted — nothing was changed.') => { p.cancel(m); };
+  if (!process.stdin.isTTY) { console.log(c.dim('(not a terminal, running install for the detected agents)')); return install({}); }
+  const bail = (m = 'Aborted. Nothing was changed.') => { p.cancel(m); };
   try {
-    p.intro(c.b(`probekit v${VERSION}`) + c.dim('  — app-security / reverse-engineering stack'));
+    p.intro(c.b(`probekit v${VERSION}`) + c.dim('  app security and reverse-engineering stack'));
 
     p.note([
       `${nodeSatisfiesRea() ? '✓' : '✗'} node ${process.versions.node}${nodeSatisfiesRea() ? '' : '  (too old for REA)'}`,
@@ -422,7 +422,7 @@ async function init() {
     ].join('\n'), 'Engines');
 
     const sel = await p.autocompleteMultiselect({
-      message: 'Which agents get probekit? (REA MCP + skill — type to search, space to toggle)',
+      message: 'Which agents get probekit (REA MCP + skill)? Type to search, space to toggle.',
       placeholder: 'Search agents…',
       options: AGENTS.map(a => ({ value: a.id, label: a.label, hint: reaInstalled(a) ? 'configured ✓' : a.detect() ? 'detected' : undefined })),
       initialValues: detected().map(a => a.id),
@@ -446,7 +446,7 @@ async function init() {
 
     let upgradeNode = false;
     if (!nodeSatisfiesRea() && nodeViaBrew()) {
-      const r = await p.confirm({ message: `Node ${process.versions.node} is too old for REA — run \`brew upgrade node\` now? (system-wide)`, initialValue: false });
+      const r = await p.confirm({ message: `Node ${process.versions.node} is too old for REA. Run \`brew upgrade node\` now? (system-wide)`, initialValue: false });
       if (p.isCancel(r)) return bail();
       upgradeNode = r;
     }
@@ -464,7 +464,7 @@ async function init() {
     if (upgradeNode) {
       const s = p.spinner(); s.start('brew upgrade node (system-wide)');
       const res = await run('brew', ['upgrade', 'node'], { ms: BREW_MS });
-      s.stop(res === 'ok' ? 'Node upgraded' : `brew upgrade node ${res === 'timeout' ? 'timed out' : 'failed'} — upgrade Node manually`);
+      s.stop(res === 'ok' ? 'Node upgraded' : `brew upgrade node ${res === 'timeout' ? 'timed out' : 'failed'}, upgrade Node manually`);
     }
     const done = [], manual = [];
     for (const a of agents) {
@@ -475,31 +475,31 @@ async function init() {
       const m = await installMcp(a, mem);
       const sk = m.ok ? await installSkillFor(a) : null;
       await minSpin;
-      const mcpTag = m.ok ? (m.note ? `REA MCP (${m.note})` : 'REA MCP') : 'REA MCP — manual step needed';
+      const mcpTag = m.ok ? (m.note ? `REA MCP (${m.note})` : 'REA MCP') : 'REA MCP needs a manual step';
       const skTag = !m.ok ? ' (skill skipped until the MCP is configured)'
         : sk?.how === 'native' ? ' + skill'
         : sk?.how === 'native-failed' ? ` (skill failed: ${sk.error})`
         : sk?.how === 'skills-cli' ? ' + skill (via skills CLI)'
-        : sk?.how === 'skills-cli-failed' ? ' (skill failed — run `npx skills add` manually)'
+        : sk?.how === 'skills-cli-failed' ? ' (skill failed, run `npx skills add` manually)'
         : '';
-      s.stop(`${a.label} — ${mcpTag}${skTag}`);
+      s.stop(`${a.label}: ${mcpTag}${skTag}`);
       if (m.ok) done.push(a.label);
       else { manual.push({ label: a.label, hint: m.hint }); p.log.warn(`${a.label}: ${m.hint}`); }
     }
 
     const nv = (sh('node -v') || '').replace(/^v/, '');
     const nodeOkNow = upgradeNode ? nodeSatisfiesReaV(nv) : nodeSatisfiesRea();
-    if (upgradeNode && nodeOkNow) p.log.success(`Node is now ${nv} — satisfies REA.`);
+    if (upgradeNode && nodeOkNow) p.log.success(`Node is now ${nv}, which REA supports.`);
 
     const steps = [];
     if (done.length) steps.push(`Restart / reconnect ${done.join(', ')} so probekit loads.`);
     if (manual.length) steps.push(`Finish by hand for ${manual.map(x => x.label).join(', ')} (commands shown above).`);
-    if (!nodeOkNow) steps.push(`Update Node to ${REA_NODE_REQ}${nodeViaBrew() ? ' — run \`brew upgrade node\`' : ' via your Node manager'}. REA stays unhealthy until then.`);
+    if (!nodeOkNow) steps.push(`Update Node to ${REA_NODE_REQ}${nodeViaBrew() ? ' (run \`brew upgrade node\`)' : ' via your Node manager'}. REA stays unhealthy until then.`);
     if (steps.length) p.note(steps.map((s, i) => `${c.dim(`${i + 1}.`)} ${s}`).join('\n'), 'Next steps');
     p.note(`${c.b(`npx skills add ${SKILLS_REPO}`)}\n${c.dim('Installs the probekit skill on any of 80+ other coding agents.')}`, 'Add probekit elsewhere');
     p.outro(done.length
       ? c.g(`✓ REA MCP ready on ${done.join(', ')}`) + (manual.length ? c.y(`  ·  ${manual.length} need a manual step`) : '')
-      : c.y('No agent fully configured — see the manual steps above.'));
+      : c.y('No agent is fully configured. See the manual steps above.'));
     return;
   } catch (e) {
     if (e && (e.code === 'ABORT_ERR' || e.code === 'ERR_USE_AFTER_CLOSE')) return bail();
@@ -516,8 +516,8 @@ async function setupEngines() {
       if (which(probe)) { console.log(`  ${c.g('✓')} ${f} already present`); continue; }
       console.log(c.dim(`  brew install ${f} ...`));
       const res = await run('brew', ['install', f], { ms: BREW_MS, stdio: ['ignore', 'inherit', 'inherit'] });
-      if (res === 'timeout') console.log(c.y(`  ! brew install ${f} timed out after ${BREW_MS / 60000} min and was stopped — run \`brew install ${f}\` yourself (if brew reports a lock, wait for or end the other brew process first)`));
-      else if (res !== 'ok') console.log(c.y(`  ! brew install ${f} failed — install it manually`));
+      if (res === 'timeout') console.log(c.y(`  ! brew install ${f} timed out after ${BREW_MS / 60000} min and was stopped. Run \`brew install ${f}\` yourself (if brew reports a lock, wait for the other brew process to finish or end it first).`));
+      else if (res !== 'ok') console.log(c.y(`  ! brew install ${f} failed, install it manually`));
     }
   } else {
     console.log(c.y('  Homebrew not found. Install openjdk, apktool and mitmproxy with your package manager.'));
@@ -539,30 +539,30 @@ function ghidraHelp() {
 }
 
 function uninstall() {
-  console.log(c.b('\nuninstall (config only — engines are left in place)\n'));
+  console.log(c.b('\nuninstall (config only, engines are left in place)\n'));
   const touched = [];
   for (const a of AGENTS) {
     let hit = false;
     try { if (removeMcp(a)) { console.log(`  ${c.g('✓')} removed REA MCP from ${a.label}`); hit = true; } }
-    catch (e) { console.log(c.y(`  ! REA MCP not removed from ${a.label} — ${e.message}`)); }
-    const skdir = skillDirOf(a); // native or skills-CLI global dir — removed directly (no npx, no hang)
+    catch (e) { console.log(c.y(`  ! REA MCP not removed from ${a.label}: ${e.message}`)); }
+    const skdir = skillDirOf(a); // native or skills-CLI global dir, removed directly (no npx, no hang)
     if (skdir) { fs.rmSync(skdir, { recursive: true, force: true }); console.log(`  ${c.g('✓')} removed skill from ${tilde(skdir)}`); hit = true; }
     if (hit) touched.push(a.label);
   }
-  if (!touched.length) { console.log(c.dim('  Nothing to remove — probekit was not wired into any agent.\n')); return; }
+  if (!touched.length) { console.log(c.dim('  Nothing to remove: probekit is not set up in any agent.\n')); return; }
   console.log(reloadNote(touched, false));
 }
 
 function help() {
   console.log(`
-${c.b('probekit')} v${VERSION} — app-security / reverse-engineering stack installer
+${c.b('probekit')} v${VERSION}: installer for an app security and reverse-engineering stack
 
   ${c.b('probekit')} [command]   ${c.dim('(install: npx @lrzdeveloper/probekit)')}
 
   (no command)   Guided interactive setup (same as 'init')
   init           Guided interactive setup: detect agents, choose, confirm, apply
   install        Non-interactive install for all detected agents
-  doctor         Report engines and, per agent, REA + skill wiring
+  doctor         Show the engines and, for each agent, whether REA and the skill are set up
   setup-engines  Install the analysis engines (brew where possible; Ghidra guided)
   uninstall      Remove the REA MCP entries and the probekit skill from all agents
   help           This message
@@ -605,8 +605,8 @@ async function notifyUpdate() {
     rl.close();
     if (!a.startsWith('y')) { console.log(c.dim('  Later: `npm i -g @lrzdeveloper/probekit@latest`, or just run `npx @lrzdeveloper/probekit@latest`.')); return; }
     console.log(c.dim('  Updating globally via npm…'));
-    try { execSync('npm install -g @lrzdeveloper/probekit@latest', { stdio: 'inherit' }); console.log(c.g('  Updated — re-run `probekit` to use the new version.')); }
-    catch { console.log(c.y('  Update failed — run `npm i -g @lrzdeveloper/probekit@latest` manually (or use `npx @lrzdeveloper/probekit@latest`).')); }
+    try { execSync('npm install -g @lrzdeveloper/probekit@latest', { stdio: 'inherit' }); console.log(c.g('  Updated. Run `probekit` again to use the new version.')); }
+    catch { console.log(c.y('  Update failed. Run `npm i -g @lrzdeveloper/probekit@latest` yourself, or use `npx @lrzdeveloper/probekit@latest`.')); }
   } catch { try { rl.close(); } catch {} }
 }
 
