@@ -18,6 +18,11 @@ description: >-
 
 # App security audit
 
+> **Requires the REA MCP server.** This skill is the method; the REA MCP tools
+> (`mcp__rea__*`, wrapping Ghidra/JADX/apktool) are the muscle it drives — the
+> skill cannot do its job without them. If REA isn't registered in this agent,
+> set it up with `npx @lrzdeveloper/probekit` (it wires the REA MCP for you).
+
 You are determining one thing: **is this artifact safe to run, or does it do
 something the user would not want?** Everything else serves that question.
 

@@ -1,6 +1,6 @@
 {
   "name": "@lrzdeveloper/probekit",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Guided, dynamic installer for an app-security / reverse-engineering stack: the probekit skill plus the REA MCP server (Ghidra/JADX/apktool) wired into whichever AI agents you have — Claude Code, Pi, Cursor, Windsurf, Claude Desktop — detected automatically and chosen by you.",
   "type": "module",
   "bin": {
@@ -42,5 +42,8 @@
   "scripts": {
     "doctor": "node bin/cli.mjs doctor",
     "test": "node --test"
+  },
+  "dependencies": {
+    "@clack/prompts": "^1.8.1"
   }
 }

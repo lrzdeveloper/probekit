@@ -3,10 +3,11 @@
 [![npm version](https://img.shields.io/npm/v/@lrzdeveloper/probekit.svg)](https://www.npmjs.com/package/@lrzdeveloper/probekit)
 [![CI](https://github.com/lrzdeveloper/probekit/actions/workflows/ci.yml/badge.svg)](https://github.com/lrzdeveloper/probekit/actions/workflows/ci.yml)
 [![node](https://img.shields.io/node/v/@lrzdeveloper/probekit.svg)](https://nodejs.org)
+[![skills.sh](https://skills.sh/b/lrzdeveloper/probekit)](https://skills.sh/lrzdeveloper/probekit)
 
 A one-command installer for a complete **app security / reverse-engineering
 stack**, driven by whichever AI agents you have (Claude Code, Pi, Cursor,
-Windsurf, Claude Desktop) — detected automatically, chosen by you.
+Windsurf) — detected automatically, chosen by you with a searchable multiselect.
 
 It wires up two things:
 
@@ -105,19 +106,36 @@ bumping it is a deliberate, released change to probekit.
 
 ## Supported agents
 
-probekit wires into whichever of these it finds on your machine; the guided
-setup defaults to the detected ones and lets you add or drop any:
+Every selected agent **always gets both** — the REA MCP *and* the skill (the
+skill is useless without REA). The guided setup detects your agents and defaults
+to the detected ones.
 
-| Agent | REA MCP | probekit skill | Config file |
+| Agent | REA MCP | Skill delivered via | MCP config file |
 |---|---|---|---|
-| Claude Code | ✓ | ✓ | `~/.claude.json` |
-| Pi agent | ✓ | ✓ | `~/.pi/agent/mcp.json` |
-| Cursor | ✓ | — | `~/.cursor/mcp.json` |
-| Windsurf | ✓ | — | `~/.codeium/windsurf/mcp_config.json` |
-| Claude Desktop | ✓ | — | `claude_desktop_config.json` |
+| Claude Code | ✓ | native (`SKILL.md`) | `~/.claude.json` |
+| Pi agent | ✓ | native (`SKILL.md`) | `~/.pi/agent/mcp.json` |
+| Cursor | ✓ | `skills` CLI | `~/.cursor/mcp.json` |
+| Windsurf | ✓ | `skills` CLI | `~/.codeium/windsurf/mcp_config.json` |
 
-The `SKILL.md` audit flow is understood only by Claude Code and Pi; other agents
-get the REA MCP tools alone.
+For Claude Code and Pi probekit copies the skill directly; for the others it
+installs it through the [`skills` CLI](https://skills.sh) (`npx skills add
+lrzdeveloper/probekit`), which covers **80+ agents**. See below.
+
+## The skill on 80+ agents (skills.sh)
+
+The probekit skill is published to [skills.sh](https://skills.sh/lrzdeveloper/probekit),
+so any agent supported by the open [`skills`](https://github.com/vercel-labs/skills)
+ecosystem can install it:
+
+```bash
+npx skills add lrzdeveloper/probekit            # pick agents interactively
+npx skills add lrzdeveloper/probekit -a cursor  # or target one
+```
+
+> **The skill needs the REA MCP to work.** If you install only the skill (via
+> `skills`), still run `npx @lrzdeveloper/probekit` to wire the REA MCP for that
+> agent — the skill says so itself. The `probekit` installer always sets up both
+> together, so it's the complete path.
 
 ## What `install` changes
 
@@ -131,12 +149,13 @@ For each selected agent:
   - `REA_APKTOOL_COMMAND` from `apktool` on `PATH`
   - `GHIDRA_MAXMEM` sized to ~half your RAM (capped at 16G), and a 30-min startup
     timeout for large binaries
-- For skill-aware agents (Claude Code, Pi), copies the skill into that agent's
-  skills directory.
+- Installs the skill: copied directly for Claude Code and Pi, or via the `skills`
+  CLI for the others — so every selected agent ends up with **both** the skill
+  and the REA MCP.
 - Backs up every config file it touches (`*.bak.<timestamp>`) before writing.
 
-It never installs or upgrades unrelated software, and never executes an analysis
-target.
+It never upgrades Node or other software without asking, and never executes an
+analysis target.
 
 ## The audit flow (what the skill makes the agent do)
 

@@ -8,6 +8,7 @@ import os from 'node:os';
 import * as readline from 'node:readline/promises';
 import { execSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import * as p from '@clack/prompts';
 
 const HOME = os.homedir();
 const PKG_ROOT = path.resolve(fileURLToPath(import.meta.url), '..', '..');
@@ -19,27 +20,7 @@ const GHIDRA_SERIES = /^ghidra_12\.1\.\d+_PUBLIC$/;        // REA requires the 1
 
 const c = { dim: s => `\x1b[2m${s}\x1b[0m`, g: s => `\x1b[32m${s}\x1b[0m`,
   r: s => `\x1b[31m${s}\x1b[0m`, y: s => `\x1b[33m${s}\x1b[0m`, b: s => `\x1b[1m${s}\x1b[0m` };
-const tilde = p => (p || '').replace(HOME, '~');
-
-// ---- tiny zero-dep TUI (clack/Pi-installer style): clear, banner, spinner ----
-const sleep = ms => new Promise(r => setTimeout(r, ms));
-const clear = () => process.stdout.write('\x1b[2J\x1b[3J\x1b[H');
-const SPIN = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
-async function spin(label, ms = 420) {
-  let i = 0;
-  const t = setInterval(() => process.stdout.write(`\r  ${c.y(SPIN[i++ % SPIN.length])} ${label}\x1b[K`), 80);
-  await sleep(ms);
-  clearInterval(t);
-  process.stdout.write(`\r  ${c.g('◇')} ${label}\x1b[K\n`);
-}
-function banner() {
-  console.log(`\n  ${c.b(c.g('◆ probekit'))} ${c.dim('v' + VERSION)}`);
-  console.log(`  ${c.dim('app-security / reverse-engineering stack installer')}\n`);
-}
-function engineLine() {
-  const items = [['Ghidra', !!findGhidra()], ['jadx', !!findJadxJar()], ['apktool', !!which('apktool')], ['mitmproxy', !!which('mitmdump')], ['node', nodeSatisfiesRea()]];
-  return '  ' + items.map(([n, ok]) => (ok ? c.g('✓ ' + n) : c.r('✗ ' + n))).join(c.dim('  ·  '));
-}
+const tilde = x => (x || '').replace(HOME, '~');
 
 // ---- small shell + fs helpers ----
 const sh = cmd => { try { return execSync(cmd, { stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim(); } catch { return ''; } };
@@ -51,9 +32,10 @@ const backup = p => { if (!exists(p)) return null; const b = `${p}.bak.${Date.no
 const globFirst = (dir, re) => { try { return fs.readdirSync(dir).filter(f => re.test(f)).sort().reverse().map(f => path.join(dir, f))[0] || ''; } catch { return ''; } };
 
 // ---- agent targets: detected dynamically, chosen by the user ----
-// mcp.type:'stdio' only where the agent's schema expects it (Pi). skillDir set
-// only for agents that understand SKILL.md (Claude Code, Pi); others get the
-// REA MCP alone.
+// Every selected agent ALWAYS gets the REA MCP (the skill is useless without it).
+// The skill is delivered either natively (skillDir, for agents that read
+// SKILL.md: Claude Code, Pi) or via the `skills` CLI (skillsAgent). Claude
+// Desktop is MCP-only — it has no skill mechanism.
 const AGENTS = [
   { id: 'claude-code', label: 'Claude Code',
     detect: () => exists(path.join(HOME, '.claude.json')) || exists(path.join(HOME, '.claude')),
@@ -65,16 +47,12 @@ const AGENTS = [
     skillDir: path.join(HOME, '.pi', 'agent', 'skills', 'probekit') },
   { id: 'cursor', label: 'Cursor',
     detect: () => exists(path.join(HOME, '.cursor')),
-    mcpFile: path.join(HOME, '.cursor', 'mcp.json') },
+    mcpFile: path.join(HOME, '.cursor', 'mcp.json'), skillsAgent: 'cursor' },
   { id: 'windsurf', label: 'Windsurf',
     detect: () => exists(path.join(HOME, '.codeium', 'windsurf')),
-    mcpFile: path.join(HOME, '.codeium', 'windsurf', 'mcp_config.json') },
-  { id: 'claude-desktop', label: 'Claude Desktop',
-    detect: () => exists(path.join(HOME, 'Library', 'Application Support', 'Claude')) || exists(path.join(HOME, '.config', 'Claude')),
-    mcpFile: process.platform === 'darwin'
-      ? path.join(HOME, 'Library', 'Application Support', 'Claude', 'claude_desktop_config.json')
-      : path.join(HOME, '.config', 'Claude', 'claude_desktop_config.json') },
+    mcpFile: path.join(HOME, '.codeium', 'windsurf', 'mcp_config.json'), skillsAgent: 'windsurf' },
 ];
+const SKILLS_REPO = 'lrzdeveloper/probekit'; // for `npx skills add <repo>`
 const byId = id => AGENTS.find(a => a.id === id);
 const detected = () => AGENTS.filter(a => a.detect());
 
@@ -133,6 +111,16 @@ function installSkillInto(agent) {
   fs.cpSync(SKILL_SRC, agent.skillDir, { recursive: true });
   return agent.skillDir;
 }
+// Deliver the skill: natively (SKILL.md copy) for Claude Code/Pi, or via the
+// vercel-labs `skills` CLI for the rest. Returns {how} or null (MCP-only agent).
+function installSkillFor(agent) {
+  if (agent.skillDir) { installSkillInto(agent); return { how: 'native', where: agent.skillDir }; }
+  if (agent.skillsAgent) {
+    try { execSync(`npx -y skills@latest add ${SKILLS_REPO} --skill probekit -a ${agent.skillsAgent} -g`, { stdio: 'ignore' }); return { how: 'skills-cli' }; }
+    catch { return { how: 'skills-cli-failed' }; }
+  }
+  return null; // e.g. Claude Desktop — no skill mechanism, MCP only
+}
 const reaInstalled = agent => exists(agent.mcpFile) && !!(readJson(agent.mcpFile).mcpServers || {}).rea;
 const skillInstalled = agent => !!agent.skillDir && exists(path.join(agent.skillDir, 'SKILL.md'));
 // Agents only load/unload probekit on restart — always tell the user to reload.
@@ -156,6 +144,7 @@ function doctor() {
     const det = a.detect();
     const bits = [reaInstalled(a) ? c.g('REA ✓') : det ? c.r('REA ✗') : c.dim('REA –')];
     if (a.skillDir) bits.push(skillInstalled(a) ? c.g('skill ✓') : det ? c.r('skill ✗') : c.dim('skill –'));
+    else if (a.skillsAgent) bits.push(c.dim('skill via skills CLI'));
     else bits.push(c.dim('(MCP only)'));
     console.log(`  ${det ? c.g('●') : c.dim('○')} ${a.label.padEnd(15)} ${bits.join('   ')}${det ? '' : c.dim('  not detected')}`);
   }
@@ -171,7 +160,10 @@ function install(opts = {}) {
   for (const a of agents) {
     const b = registerReaIn(a, mem);
     console.log(`  ${c.g('✓')} REA MCP → ${tilde(a.mcpFile)} ${b ? c.dim(`(backup ${path.basename(b)})`) : ''}`);
-    if (a.skillDir) { installSkillInto(a); console.log(`  ${c.g('✓')} skill  → ${tilde(a.skillDir)}`); }
+    const sk = installSkillFor(a);
+    if (sk?.how === 'native') console.log(`  ${c.g('✓')} skill  → ${tilde(sk.where)}`);
+    else if (sk?.how === 'skills-cli') console.log(`  ${c.g('✓')} skill  → via skills CLI (${a.skillsAgent})`);
+    else if (sk?.how === 'skills-cli-failed') console.log(c.y(`  ! skill not installed — run: npx skills add ${SKILLS_REPO} -a ${a.skillsAgent}`));
   }
   if (!nodeSatisfiesRea()) console.log(c.y(`\n  ⚠ Node ${process.versions.node} is too old for REA (${REA_NODE_REQ}).\n    Update Node, then reconnect the MCP. Until then REA will report unhealthy.`));
   const env = buildEnv(mem);
@@ -180,88 +172,91 @@ function install(opts = {}) {
   doctor();
 }
 
-// Guided, interactive setup — clack/Pi-installer style: clears between steps,
-// keeps a running summary, animates the apply. Falls back to a plain install
-// when not a TTY (piped, CI). Enter always accepts the shown default.
+// Guided, interactive setup with @clack/prompts: a searchable multiselect over
+// agents (type to filter, space to toggle), spinners for the apply. Every
+// selected agent ALWAYS gets the REA MCP (+ the skill). Falls back to a plain
+// install when not a TTY (piped, CI).
 async function init() {
-  if (!process.stdin.isTTY) { console.log(c.dim('(non-interactive input — running install for detected agents)')); return install({}); }
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-  const answered = [];
-  const frame = () => {
-    clear(); banner();
-    console.log(engineLine() + '\n');
-    for (const s of answered) console.log(`  ${c.g('◇')} ${c.dim(s.l + ':')} ${s.v}`);
-    if (answered.length) console.log();
-  };
-  const ask = async (q, def) => { frame(); const a = (await rl.question(`  ${c.b(c.g('?'))} ${q}${def !== undefined ? c.dim(` [${def}]`) : ''} `)).trim(); return a || (def !== undefined ? String(def) : ''); };
-  const confirm = async (q, dy = true) => { frame(); const a = (await rl.question(`  ${c.b(c.g('?'))} ${q} ${c.dim(dy ? '(Y/n)' : '(y/N)')} `)).trim().toLowerCase(); return a ? a.startsWith('y') : dy; };
+  if (!process.stdin.isTTY) { console.log(c.dim('(non-interactive — running install for detected agents)')); return install({}); }
+  const bail = (m = 'Aborted — nothing was changed.') => { p.cancel(m); };
   try {
-    clear(); banner();
-    console.log(c.dim('  Press Enter to accept each default (the capitalised Y or N).'));
-    await spin('Scanning engines and agents…', 650);
+    p.intro(c.b(`probekit v${VERSION}`) + c.dim('  — app-security / reverse-engineering stack'));
 
-    const chosen = [];
-    for (const a of AGENTS) {
-      const det = a.detect();
-      const tag = det ? c.g('(detected)') : c.dim('(not detected)');
-      const extra = a.skillDir ? '' : c.dim(' · REA MCP only');
-      const ok = await confirm(`${a.label} ${tag}${extra}`, det);
-      answered.push({ l: a.label, v: ok ? c.g('yes') : c.dim('no') });
-      if (ok) chosen.push(a);
-    }
-    if (!chosen.length) { frame(); console.log(c.y('  Nothing selected — nothing to do.\n')); return; }
+    p.note([
+      `${nodeSatisfiesRea() ? '✓' : '✗'} node ${process.versions.node}${nodeSatisfiesRea() ? '' : '  (too old for REA)'}`,
+      `${findGhidra() ? '✓' : '✗'} Ghidra 12.1.x`,
+      `${findJadxJar() ? '✓' : '✗'} jadx`,
+      `${which('apktool') ? '✓' : '✗'} apktool`,
+      `${which('mitmdump') ? '✓' : '✗'} mitmproxy`,
+    ].join('\n'), 'Engines');
 
-    let mem = await ask('Ghidra heap size', `${ghidraMemG()}G`);
+    const sel = await p.autocompleteMultiselect({
+      message: 'Which agents get probekit? (REA MCP + skill — type to search, space to toggle)',
+      placeholder: 'Search agents…',
+      options: AGENTS.map(a => ({ value: a.id, label: a.label, hint: a.detect() ? 'detected' : undefined })),
+      initialValues: detected().map(a => a.id),
+      required: true,
+    });
+    if (p.isCancel(sel)) return bail();
+    const agents = sel.map(byId).filter(Boolean);
+
+    const memRaw = await p.text({ message: 'Ghidra heap size', initialValue: `${ghidraMemG()}G`, placeholder: `${ghidraMemG()}G` });
+    if (p.isCancel(memRaw)) return bail();
+    let mem = String(memRaw).trim();
     if (!/g$/i.test(mem)) mem = (mem.replace(/[^0-9]/g, '') || ghidraMemG()) + 'G';
-    answered.push({ l: 'Ghidra heap', v: mem });
 
-    const missing = [!findGhidra() && 'Ghidra 12.1.x', !findJadxJar() && 'jadx MCP jar', !which('apktool') && 'apktool', !which('mitmdump') && 'mitmproxy'].filter(Boolean);
+    const missing = [!findGhidra() && 'Ghidra 12.1.x', !findJadxJar() && 'jadx', !which('apktool') && 'apktool', !which('mitmdump') && 'mitmproxy'].filter(Boolean);
     let runEngines = false;
-    if (missing.length) { runEngines = await confirm(`Install missing engines now (${missing.join(', ')})?`, false); answered.push({ l: 'Install engines', v: runEngines ? c.g('yes') : c.dim('no') }); }
+    if (missing.length) {
+      const r = await p.confirm({ message: `Install missing engines now (${missing.join(', ')})?`, initialValue: false });
+      if (p.isCancel(r)) return bail();
+      runEngines = r;
+    }
 
-    // Offer a Node upgrade only when it's too old AND brew-managed (safe to upgrade).
     let upgradeNode = false;
     if (!nodeSatisfiesRea() && nodeViaBrew()) {
-      upgradeNode = await confirm(`Node ${process.versions.node} is too old for REA — run \`brew upgrade node\` now? ${c.dim('(system-wide, affects all your Node projects)')}`, false);
-      answered.push({ l: 'Upgrade Node', v: upgradeNode ? c.g('yes') : c.dim('no') });
+      const r = await p.confirm({ message: `Node ${process.versions.node} is too old for REA — run \`brew upgrade node\` now? (system-wide)`, initialValue: false });
+      if (p.isCancel(r)) return bail();
+      upgradeNode = r;
     }
 
-    // summary screen (no frame() so it stays put while we confirm)
-    clear(); banner();
-    console.log(engineLine() + '\n');
-    console.log(c.b('  Will apply:'));
-    for (const a of chosen) console.log(`    • ${a.label} → REA MCP${a.skillDir ? c.g(' + skill') : ''}  ${c.dim(`(Ghidra heap ${mem})`)}`);
-    if (runEngines) console.log('    • install missing engines first');
-    if (upgradeNode) console.log('    • ' + c.y('brew upgrade node') + c.dim(' (system-wide) first'));
-    console.log(c.dim('    every config file is backed up before writing'));
-    if (!nodeSatisfiesRea() && !upgradeNode) console.log(c.y(`\n  ⚠ Node ${process.versions.node} is below REA's requirement (${REA_NODE_REQ})${nodeViaBrew() ? '' : ' — upgrade it via your Node manager'}.`));
-    const ans = (await rl.question(`\n  ${c.b(c.g('?'))} Proceed? ${c.dim('(Y/n)')} `)).trim().toLowerCase();
-    if (ans && !ans.startsWith('y')) { console.log(c.y('\n  Aborted — nothing was changed.\n')); return; }
-    rl.close();
+    p.note(
+      agents.map(a => `• ${a.label} → REA MCP + skill`).join('\n')
+      + (runEngines ? '\n• install missing engines first' : '')
+      + (upgradeNode ? '\n• brew upgrade node (system-wide) first' : '')
+      + `\n\nGhidra heap ${mem}; every config is backed up first.`,
+      'Will apply');
+    const go = await p.confirm({ message: 'Proceed?', initialValue: true });
+    if (p.isCancel(go) || !go) return bail();
 
     if (runEngines) setupEngines();
     if (upgradeNode) {
-      clear(); banner();
-      console.log(c.b('  Upgrading Node via Homebrew…') + c.dim('  (one-time, system-wide; brew output follows)\n'));
-      try { execSync('brew upgrade node', { stdio: 'inherit' }); } catch { console.log(c.y('\n  brew upgrade node failed — upgrade Node manually.')); }
+      const s = p.spinner(); s.start('brew upgrade node (system-wide)');
+      try { execSync('brew upgrade node', { stdio: 'ignore' }); s.stop('Node upgraded'); }
+      catch { s.stop('brew upgrade node failed — upgrade Node manually'); }
     }
-    clear(); banner();
-    for (const a of chosen) {
-      await spin(`Configuring ${a.label}…`, 260);
+    for (const a of agents) {
+      const s = p.spinner(); s.start(`Configuring ${a.label}`);
       registerReaIn(a, mem);
-      if (a.skillDir) installSkillInto(a);
+      const sk = installSkillFor(a);
+      const tag = sk?.how === 'native' ? 'REA MCP + skill'
+        : sk?.how === 'skills-cli' ? 'REA MCP + skill (via skills CLI)'
+        : sk?.how === 'skills-cli-failed' ? 'REA MCP (skill install failed — run `npx skills add` manually)'
+        : 'REA MCP';
+      s.stop(`${a.label} — ${tag}`);
     }
-    console.log(`\n  ${c.g('✓')} ${c.b('probekit installed')} for ${chosen.map(a => a.label).join(', ')}.`);
+
     const nv = (sh('node -v') || '').replace(/^v/, '');
-    if (upgradeNode && nodeSatisfiesReaV(nv)) console.log(c.g(`\n  ✓ Node is now ${nv} — satisfies REA.`));
-    else if (!nodeSatisfiesRea()) console.log(c.y(`\n  ⚠ Update Node (${REA_NODE_REQ})${nodeViaBrew() ? ' — `brew upgrade node`' : ' via your Node manager'} — then reconnect; REA stays unhealthy until then.`));
-    console.log(reloadNote(chosen.map(a => a.label), true));
+    const lines = [`Restart / reconnect ${agents.map(a => a.label).join(', ')} so probekit shows up.`];
+    if (upgradeNode && nodeSatisfiesReaV(nv)) lines.push(`Node is now ${nv} — satisfies REA.`);
+    else if (!nodeSatisfiesRea()) lines.push(`Update Node (${REA_NODE_REQ})${nodeViaBrew() ? ' — brew upgrade node' : ''} before REA is healthy.`);
+    lines.push(`Also installable on 80+ agents: npx skills add ${SKILLS_REPO}`);
+    p.outro(lines.join('\n'));
     return;
   } catch (e) {
-    // stdin closed mid-flow (Ctrl+D, piped EOF) — nothing was written yet.
-    if (e && (e.code === 'ABORT_ERR' || e.code === 'ERR_USE_AFTER_CLOSE')) { console.log(c.y('\n  Aborted — nothing was changed.\n')); return; }
+    if (e && (e.code === 'ABORT_ERR' || e.code === 'ERR_USE_AFTER_CLOSE')) return bail();
     throw e;
-  } finally { try { rl.close(); } catch {} }
+  }
 }
 
 function setupEngines() {
